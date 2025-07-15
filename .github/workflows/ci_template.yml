@@ -1,0 +1,61 @@
+name: 'Template CI Action'
+on:
+  workflow_call:
+    inputs:
+      repo: 
+        description: 'Repository to check out'
+        required: true
+        type: string
+      submodule_path:
+        description: 'Path to the submodule within the repository'
+        required: true
+        type: string
+    secrets:
+      REPO_ACCESS_TOKEN:
+        description: 'Token to access the repository'
+        required: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ROOT: "/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
+      REPO_NAME: ${{ github.event.repository.name }}
+      BRANCH: ${{ github.head_ref || 'main' }}
+
+    steps:
+      - name: Validate Inputs
+        run: |
+          if [[ -z "${{ inputs.repo }}" ]]; then
+            echo "Error: 'repo' input cannot be empty."
+            exit 1
+          fi
+          if [[ -z "${{ inputs.submodule_path }}" ]]; then
+            echo "Error: 'submodule_path' input cannot be empty."
+            exit 1
+          fi            
+
+      - name: Configure Git with Token Authentication
+        run: |
+          git config --global url."https://${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      
+      - name: Checkout current repository
+        run: |
+          echo "Checking out branch: $BRANCH"
+          git clone --depth=1 --branch $BRANCH https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      
+      - name: Lint with rustfmt
+        continue-on-error: true
+        working-directory: ${{ inputs.submodule_path }}
+        run: cargo fmt --all -- --check
+      
+      - name: Run Tests
+        working-directory: ${{ inputs.submodule_path }}
+        run: cargo test --verbose
