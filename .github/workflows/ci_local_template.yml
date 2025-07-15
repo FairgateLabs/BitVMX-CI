@@ -1,0 +1,372 @@
+name: 'Template Test Action'
+on:
+  workflow_call:
+    inputs:
+      repo: 
+        description: 'Repository to check out'
+        required: true
+        type: string
+      submodule_path:
+        description: 'Path to the submodule within the repository'
+        required: true
+        type: string
+      cargo_lock_path:
+        description: 'Path to the Cargo.lock file'
+        required: true
+        type: string
+      target_path:
+        description: 'Path to the target directory'
+        required: true
+        type: string
+      docker_required:
+        description: 'Whether to execute Docker-related steps'
+        required: false
+        type: boolean
+        default: false
+      dockerfile_path:
+        description: 'Path to Docker file'
+        required: false
+        type: string        
+      docker_compose_path:
+        description: 'Path to docker-compose file'
+        required: false
+        type: string
+      nightly:
+        description: 'Flag to determine if nightly triggered'
+        required: false
+        type: boolean
+      cargo_features:
+        description: 'Cargo features to enable (space or comma separated)'
+        required: false
+        type: string
+      clippy:
+        description: 'Flag to determine if format with clippy is triggered'
+        required: false
+        type: boolean
+      build_cpu:
+        description: 'Flag to determine if we need to build the CPU'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      REPO_ACCESS_TOKEN:
+        description: 'Token to access the repository'
+        required: true
+      SSH_PRIVATE_KEY:
+        description: 'Private SSH key to authenticate with GitHub'
+        required: true
+      SLACK_WEBHOOK_URL:
+        description: 'Webhook endpoint to post on channel'
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  pull-requests: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    
+    env:
+      ROOT: "/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
+      REPO_NAME: ${{ github.event.repository.name }}
+      BRANCH: ${{ github.head_ref || 'main' }}
+
+    steps:
+      - name: Validate Inputs
+        run: |
+          ERRORS=()          
+          
+          [[ -z "${{ inputs.repo }}" ]] && ERRORS+=("'repo' input cannot be empty")
+          [[ -z "${{ inputs.submodule_path }}" ]] && ERRORS+=("'submodule_path' input cannot be empty")
+          [[ -z "${{ inputs.cargo_lock_path }}" ]] && ERRORS+=("'cargo_lock_path' input cannot be empty")
+          [[ -z "${{ inputs.target_path }}" ]] && ERRORS+=("'target_path' input cannot be empty")          
+          
+          if [[ ! "${{ inputs.repo }}" =~ ^[a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-]+$ ]]; then
+            ERRORS+=("'repo' must be in format 'owner/repo'")
+          fi
+          
+          if [[ ! "${{ inputs.submodule_path }}" =~ ^[a-zA-Z0-9_\-]+$ ]]; then
+            ERRORS+=("'submodule_path' contains invalid characters")
+          fi
+          
+          if [[ -n "${{ inputs.cargo_features }}" ]]; then
+            if [[ ! "${{ inputs.cargo_features }}" =~ ^[a-zA-Z0-9_,-]+$ ]]; then
+              ERRORS+=("'cargo_features' contains invalid characters")
+            fi
+          fi
+          
+          if [[ "${{ inputs.docker_required }}" == "true" ]]; then
+            [[ -z "${{ inputs.dockerfile_path }}" ]] && ERRORS+=("'dockerfile_path' required when docker_required=true")
+            [[ -z "${{ inputs.docker_compose_path }}" ]] && ERRORS+=("'docker_compose_path' required when docker_required=true")
+          fi
+          
+          if [[ ${#ERRORS[@]} -gt 0 ]]; then
+            printf "❌ Validation errors:\n"
+            printf "  - %s\n" "${ERRORS[@]}"
+            exit 1
+          fi
+          echo "✅ All inputs validated successfully"
+      
+      - name: Cleanup Disk Space
+        run: |
+          echo "🧹 Cleaning up disk space..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          echo "✅ Disk cleanup completed"
+            
+      - name: Check disk space
+        run: df -h
+
+      - name: Configure SSH for Git Submodule Access
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Configure Git with Token Authentication
+        run: |
+          git config --global url."https://x-access-token:${REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+     
+      - name: Checkout Workspace Repository
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          if [[ "$PR_TITLE" =~ ^\[([a-zA-Z0-9_\-\.\/]+)\] ]]; then
+            BRANCH_CANDIDATE="${BASH_REMATCH[1]}"
+            if [[ "$BRANCH_CANDIDATE" =~ ^[a-zA-Z0-9_\-\.\/]+$ ]] && [[ ${#BRANCH_CANDIDATE} -lt 100 ]]; then
+              SAFE_BRANCH="$BRANCH_CANDIDATE"
+            else
+              echo "⚠️  Invalid branch name in PR title, using main"
+              SAFE_BRANCH="main"
+            fi
+          else
+            SAFE_BRANCH="main"
+          fi
+          
+          echo "SAFE_BRANCH=$SAFE_BRANCH" >> $GITHUB_ENV
+          echo "✅ Using validated branch: $SAFE_BRANCH"
+          
+          git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
+      
+      - name: Checkout current repository
+        run: |
+          echo "Checking out branch: $SAFE_BRANCH"
+          git clone --depth=1 --branch "$SAFE_BRANCH" https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
+
+      - name: Handle Submodules for Nightly Build
+        run: |
+          if [[ "$NIGHTLY" == "true" ]]; then
+            echo "Rearranging submodules for build"
+            cd "$ROOT/rust-bitvmx-workspace"
+            
+            if [[ -f ".cargo/config.toml" ]]; then
+              echo "Copying .cargo/config.toml to preserve patches"
+              mkdir -p "$ROOT/.cargo"
+              cp ".cargo/config.toml" "$ROOT/.cargo/"
+            fi
+            
+            for dir in */; do
+              name="${dir%/}"
+              if [[ "$name" != "${{ inputs.submodule_path }}" ]]; then
+                echo "Moving $name to $ROOT"
+                mv "$name" "$ROOT/"
+              fi
+            done
+            echo "Moved all other submodules to top-level"
+            rm -rf "$ROOT/rust-bitvmx-workspace"
+          else
+            echo "Running in submodule-triggered mode"
+            
+            if [[ -f "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace/.cargo/config.toml" ]]; then
+              echo "Copying .cargo/config.toml to preserve patches"
+              mkdir -p "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo"
+              cp "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace/.cargo/config.toml" "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo/"
+            fi
+            
+            find /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace -mindepth 1 -maxdepth 1 ! -name '${{ inputs.submodule_path }}' -exec mv {} /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/ \;
+          fi
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      
+      - name: Lint with rustfmt
+        continue-on-error: true
+        working-directory: ${{ inputs.submodule_path }}
+        run: cargo fmt --all -- --check
+
+      - name: Lint with Clippy
+        if: ${{ inputs.clippy }}
+        continue-on-error: true
+        working-directory: ${{ inputs.submodule_path }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cache Rust Toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+          key: ${{ runner.os }}-rustup-${{ hashFiles('**/rust-toolchain*') }}
+          restore-keys: |
+            ${{ runner.os }}-rustup-
+
+      - name: Cache Cargo Registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Workspace Target Directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-workspace-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-workspace-target-
+
+      - name: Cache Submodule Target Directory
+        uses: actions/cache@v4
+        with:
+          path: ${{ inputs.submodule_path }}/target
+          key: ${{ runner.os }}-${{ inputs.submodule_path }}-target-${{ hashFiles(format('{0}/Cargo.lock', inputs.submodule_path)) }}
+          restore-keys: |
+            ${{ runner.os }}-${{ inputs.submodule_path }}-target-
+
+      ############ DOCKER SETUP OPTIONAL STEPS ############      
+      - name: Set up Docker Buildx
+        if: ${{ inputs.docker_required }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create cache directory
+        if: ${{ inputs.docker_required }}
+        run: mkdir -p /tmp/.buildx-cache
+
+      - name: Cache Docker layers
+        if: ${{ inputs.docker_required }}
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+              ${{ runner.os }}-buildx-
+
+      - name: Build and push Docker image        
+        if: ${{ inputs.docker_required }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ inputs.submodule_path }}
+          file: ./${{ inputs.submodule_path }}/${{ inputs.dockerfile_path }}
+          push: false  # Build locally
+          tags: test-image:latest
+
+      - name: Run docker-compose
+        if: ${{ inputs.docker_required }}
+        uses: hoverkraft-tech/compose-action@v2.0.1
+        with:
+          compose-file: "./${{ inputs.submodule_path }}/${{ inputs.docker_compose_path }}"
+
+      ############ END DOCKER OPTIONAL SETUP STEPS ############
+
+      - name: Build BitVMX-CPU Emulator
+        if: ${{ inputs.build_cpu }}
+        working-directory: ${{ inputs.submodule_path }}
+        run: |
+          if [[ ! -f "scripts/build-emulator.sh" ]]; then
+            echo "❌ Build script not found: scripts/build-emulator.sh"
+            exit 1
+          fi
+          
+          if grep -E "(rm -rf /|sudo rm|curl.*\|.*sh|wget.*\|.*sh|eval|exec)" scripts/build-emulator.sh; then
+            echo "❌ Build script contains potentially dangerous commands"
+            exit 1
+          fi
+          
+          chmod +x scripts/build-emulator.sh
+          timeout 600 scripts/build-emulator.sh  # 10 min timeout
+      
+      - name: Run Tests
+        working-directory: ${{ inputs.submodule_path }}
+        timeout-minutes: 90
+        run: |
+          if [[ "${{ inputs.nightly }}" == "true" ]]; then
+          echo "🌙 Running nightly tests with custom script..."
+
+          if [[ ! -f "scripts/run-tests.sh" ]]; then
+            echo "❌ Test script not found: scripts/run-tests.sh"
+            exit 1
+          fi
+
+          if grep -E "(rm -rf /|sudo rm|curl.*\|.*sh|wget.*\|.*sh|eval|exec|>.*passwd|>.*shadow)" scripts/run-tests.sh; then
+            echo "❌ Test script contains potentially dangerous commands"
+            exit 1
+          fi
+
+          chmod +x scripts/run-tests.sh
+
+          SAFE_NIGHTLY="${{ inputs.nightly }}"
+          SAFE_DOCKER_COMPOSE="${{ inputs.docker_compose_path }}"
+          SAFE_FEATURES="${{ inputs.cargo_features }}"
+
+          timeout 2700 scripts/run-tests.sh "$SAFE_NIGHTLY" "$SAFE_DOCKER_COMPOSE" "$SAFE_FEATURES"
+            else
+          echo "🧪 Running regular tests with cargo..."
+
+          FEATURES="${{ inputs.cargo_features }}"
+          if [[ -n "$FEATURES" ]]; then
+            echo "📦 Using features: $FEATURES"
+            cargo test --verbose --features "$FEATURES"
+          else
+            echo "📦 Running tests without additional features"
+            cargo test --verbose
+          fi
+            fi
+        env:
+          CI: true
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up temporary files..."
+          rm -rf /tmp/.buildx-cache || true
+          rm -rf target/debug/deps || true
+          echo "✅ Cleanup completed"
+
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} *GitHub Action Result* for `${{ github.repository }}`\n*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*PR Author:* ${{ github.event.pull_request.user.login || 'N/A' }}\n*Branch:* `${{ env.SAFE_BRANCH }}`",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*PR Author:* ${{ github.event.pull_request.user.login || 'N/A' }}\n*Branch:* `${{ env.SAFE_BRANCH }}`"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

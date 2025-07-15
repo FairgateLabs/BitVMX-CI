@@ -1,0 +1,38 @@
+name: Weekly Nightly Build
+
+on:
+  schedule:
+    - cron: '0 0 * * 3' # This runs only on WEDNESDAYS at midnight
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: 'nightly-build-${{ github.ref }}'
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - submodule: rust-bitvmx-client
+            clippy: true
+            build_cpu: true
+            dockerfile_path: tests/docker/Dockerfile
+            docker_compose_path: tests/docker/docker-compose.yml
+
+    uses: ./.github/workflows/ci_local_template.yml
+    with:
+      repo: 'FairgateLabs/rust-bitvmx-workspace'
+      submodule_path: ${{ matrix.submodule }}
+      cargo_lock_path: '${{ matrix.submodule }}/Cargo.lock'
+      target_path: '${{ matrix.submodule }}/target'
+      nightly: true
+      clippy: ${{ matrix.clippy }}
+      build_cpu: ${{ matrix.build_cpu }}
+      docker_required: true
+      dockerfile_path: ${{ matrix.dockerfile_path }}
+      docker_compose_path: ${{ matrix.docker_compose_path }}
+    secrets: inherit
