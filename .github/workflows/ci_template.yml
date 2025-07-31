@@ -44,7 +44,6 @@ jobs:
           echo "Checking out branch: $BRANCH"
           git clone --depth=1 --branch $BRANCH https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
 
-      # Install Rust
       - name: Install Rust Toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -52,13 +51,11 @@ jobs:
           toolchain: stable
           override: true
       
-      # Lint code with rustfmt
       - name: Lint with rustfmt
         continue-on-error: true
         working-directory: ${{ inputs.submodule_path }}
         run: cargo fmt --all -- --check
       
-      # Run tests
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
         run: cargo test --verbose
