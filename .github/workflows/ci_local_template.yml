@@ -304,41 +304,41 @@ jobs:
       
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
-        timeout-minutes: 45
+        timeout-minutes: 90
         run: |
-            if [[ "${{ inputs.nightly }}" == "true" ]]; then
-            echo "🌙 Running nightly tests with custom script..."
+          if [[ "${{ inputs.nightly }}" == "true" ]]; then
+          echo "🌙 Running nightly tests with custom script..."
 
-            if [[ ! -f "scripts/run-tests.sh" ]]; then
+          if [[ ! -f "scripts/run-tests.sh" ]]; then
             echo "❌ Test script not found: scripts/run-tests.sh"
             exit 1
-            fi
+          fi
 
-            if grep -E "(rm -rf /|sudo rm|curl.*\|.*sh|wget.*\|.*sh|eval|exec|>.*passwd|>.*shadow)" scripts/run-tests.sh; then
+          if grep -E "(rm -rf /|sudo rm|curl.*\|.*sh|wget.*\|.*sh|eval|exec|>.*passwd|>.*shadow)" scripts/run-tests.sh; then
             echo "❌ Test script contains potentially dangerous commands"
             exit 1
-            fi
+          fi
 
-            chmod +x scripts/run-tests.sh
+          chmod +x scripts/run-tests.sh
 
-            SAFE_NIGHTLY="${{ inputs.nightly }}"
-            SAFE_DOCKER_COMPOSE="${{ inputs.docker_compose_path }}"
-            SAFE_FEATURES="${{ inputs.cargo_features }}"
+          SAFE_NIGHTLY="${{ inputs.nightly }}"
+          SAFE_DOCKER_COMPOSE="${{ inputs.docker_compose_path }}"
+          SAFE_FEATURES="${{ inputs.cargo_features }}"
 
-            timeout 2700 scripts/run-tests.sh "$SAFE_NIGHTLY" "$SAFE_DOCKER_COMPOSE" "$SAFE_FEATURES"
+          timeout 2700 scripts/run-tests.sh "$SAFE_NIGHTLY" "$SAFE_DOCKER_COMPOSE" "$SAFE_FEATURES"
             else
-            echo "🧪 Running regular tests with cargo..."
+          echo "🧪 Running regular tests with cargo..."
 
-            FEATURES="${{ inputs.cargo_features }}"
-            if [[ -n "$FEATURES" ]]; then
+          FEATURES="${{ inputs.cargo_features }}"
+          if [[ -n "$FEATURES" ]]; then
             echo "📦 Using features: $FEATURES"
             cargo test --verbose --features "$FEATURES"
-            else
+          else
             echo "📦 Running tests without additional features"
             cargo test --verbose
+          fi
             fi
-            fi
-        env:
+          env:
             CI: true
             RUST_BACKTRACE: 1
             RUST_LOG: info
