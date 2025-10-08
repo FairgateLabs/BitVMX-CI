@@ -2,10 +2,16 @@ name: Weekly Nightly Build
 
 on:
   schedule:
-    - cron: '0 0 * * 3' # This runs only on WEDNESDAYS at midnight
+    - cron: '0 0 * * 4' # This runs only on THURSDAYS at midnight
 
 env:
   CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  pull-requests: read
 
 concurrency:
   group: 'nightly-build-${{ github.ref }}'
