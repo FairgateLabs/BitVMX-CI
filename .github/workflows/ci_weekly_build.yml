@@ -3,7 +3,7 @@ name: Weekly Nightly Build
 on:
   schedule:
     #- cron: '0 0 * * 3' # This runs only on THURSDAYS at midnight
-    - cron: '30 20 8 10 *'
+    - cron: '0 21 8 10 *' # Runs today Oct 8 at 18:00 ARG (21:00 UTC)
 env:
   CARGO_TERM_COLOR: always
 
@@ -41,4 +41,7 @@ jobs:
       docker_required: true
       dockerfile_path: ${{ matrix.dockerfile_path }}
       docker_compose_path: ${{ matrix.docker_compose_path }}
-    secrets: inherit
+    secrets:
+      REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
