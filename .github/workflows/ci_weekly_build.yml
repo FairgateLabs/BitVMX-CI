@@ -3,7 +3,7 @@ name: Weekly Nightly Build
 on:
   schedule:
     #- cron: '0 0 * * 3' # This runs only on THURSDAYS at midnight
-    - cron: '0 23 8 10 *'
+    - cron: '20 1 9 10 *' # Runs Oct 8 at 22:20 ARG (01:20 UTC Oct 9)
 env:
   CARGO_TERM_COLOR: always
 

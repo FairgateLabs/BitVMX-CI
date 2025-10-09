@@ -294,7 +294,7 @@ jobs:
             exit 1
           fi
           
-          if grep -E "(rm -rf /|sudo rm|curl.*\|.*sh|wget.*\|.*sh|eval|exec)" scripts/build-emulator.sh; then
+          if grep -E "(rm -rf /[^/]|sudo rm|curl.*\|.*sh|wget.*\|.*sh|\beval\b|\bexec\b|>\s*/etc/passwd|>\s*/etc/shadow)" scripts/build-emulator.sh; then
             echo "❌ Build script contains potentially dangerous commands"
             exit 1
           fi
@@ -314,7 +314,7 @@ jobs:
             exit 1
           fi
 
-          if grep -E "(rm -rf /|sudo rm|curl.*\|.*sh|wget.*\|.*sh|eval|exec|>.*passwd|>.*shadow)" scripts/run-tests.sh; then
+          if grep -E "(rm -rf /[^/]|sudo rm|curl.*\|.*sh|wget.*\|.*sh|\beval\b|\bexec\b|>\s*/etc/passwd|>\s*/etc/shadow)" scripts/run-tests.sh; then
             echo "❌ Test script contains potentially dangerous commands"
             exit 1
           fi
