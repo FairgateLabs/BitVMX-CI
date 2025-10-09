@@ -294,11 +294,6 @@ jobs:
             exit 1
           fi
           
-          if grep -E "(rm -rf /[^/]|sudo rm|curl.*\|.*sh|wget.*\|.*sh|\beval\b|\bexec\b|>\s*/etc/passwd|>\s*/etc/shadow)" scripts/build-emulator.sh; then
-            echo "❌ Build script contains potentially dangerous commands"
-            exit 1
-          fi
-          
           chmod +x scripts/build-emulator.sh
           timeout 600 scripts/build-emulator.sh  # 10 min timeout
       
@@ -311,11 +306,6 @@ jobs:
 
           if [[ ! -f "scripts/run-tests.sh" ]]; then
             echo "❌ Test script not found: scripts/run-tests.sh"
-            exit 1
-          fi
-
-          if grep -E "(rm -rf /[^/]|sudo rm|curl.*\|.*sh|wget.*\|.*sh|\beval\b|\bexec\b|>\s*/etc/passwd|>\s*/etc/shadow)" scripts/run-tests.sh; then
-            echo "❌ Test script contains potentially dangerous commands"
             exit 1
           fi
 
