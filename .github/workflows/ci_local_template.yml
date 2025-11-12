@@ -141,33 +141,36 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          # First try to use the actual PR branch
-          if [[ -n "${{ github.head_ref }}" ]]; then
-            SAFE_BRANCH="${{ github.head_ref }}"
-            echo " Using PR branch: $SAFE_BRANCH"
-          # Fallback to title extraction for backward compatibility
-          elif [[ "$PR_TITLE" =~ ^\[([a-zA-Z0-9_\-\.\/]+)\] ]]; then
+          if [[ "$PR_TITLE" =~ ^\[([a-zA-Z0-9_\-\.\/]+)\] ]]; then
             BRANCH_CANDIDATE="${BASH_REMATCH[1]}"
             if [[ "$BRANCH_CANDIDATE" =~ ^[a-zA-Z0-9_\-\.\/]+$ ]] && [[ ${#BRANCH_CANDIDATE} -lt 100 ]]; then
               SAFE_BRANCH="$BRANCH_CANDIDATE"
-              echo " Using branch from title: $SAFE_BRANCH"
             else
-              echo "Invalid branch name in PR title, using main"
+              echo "⚠️  Invalid branch name in PR title, using main"
               SAFE_BRANCH="main"
             fi
           else
             SAFE_BRANCH="main"
-            echo "No PR branch or title found, using main"
           fi
           
           echo "SAFE_BRANCH=$SAFE_BRANCH" >> $GITHUB_ENV
+          echo "✅ Using validated branch: $SAFE_BRANCH"
           
           git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
-            
+      
       - name: Checkout current repository
         run: |
-          echo "Checking out branch: $SAFE_BRANCH"
-          git clone --depth=1 --branch "$SAFE_BRANCH" https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
+          if [[ -n "${{ github.head_ref }}" ]]; then
+            SUBMODULE_BRANCH="${{ github.head_ref }}"
+            echo "✅ Using PR branch for submodule: $SUBMODULE_BRANCH"
+          else
+            SUBMODULE_BRANCH="main"
+            echo "⚠️ No PR branch found (likely push to main), using main"
+          fi
+          
+          echo "SUBMODULE_BRANCH=$SUBMODULE_BRANCH" >> $GITHUB_ENV
+          echo "Checking out submodule branch: $SUBMODULE_BRANCH"
+          git clone --depth=1 --branch "$SUBMODULE_BRANCH" https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
 
       - name: Handle Submodules for Nightly Build
         run: |
