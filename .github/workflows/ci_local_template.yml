@@ -181,12 +181,16 @@ jobs:
         run: |
           SUBMODULE_OVERRIDES='${{ inputs.submodule_branches }}'
           
+          echo "🔍 Debug: Raw input value:"
+          echo "$SUBMODULE_OVERRIDES"
+          echo "🔍 Input length: ${#SUBMODULE_OVERRIDES}"
+          
           if [[ "$SUBMODULE_OVERRIDES" == "{}" ]] || [[ -z "$SUBMODULE_OVERRIDES" ]]; then
-            echo "ℹNo submodule overrides specified, using default branches"
+            echo "ℹ️  No submodule overrides specified, using default branches"
             exit 0
           fi
           
-          echo "Processing submodule branch overrides..."
+          echo "🔄 Processing submodule branch overrides..."
           
           # Validate JSON format
           if ! echo "$SUBMODULE_OVERRIDES" | jq empty 2>/dev/null; then
