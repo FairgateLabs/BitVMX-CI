@@ -48,6 +48,11 @@ on:
         required: false
         type: boolean
         default: false
+      submodule_branches:
+        description: 'JSON map of submodule overrides: {"submodule-name": "branch-name"}'
+        required: false
+        type: string
+        default: '{}'
     secrets:
       REPO_ACCESS_TOKEN:
         description: 'Token to access the repository'
@@ -171,6 +176,59 @@ jobs:
           echo "SUBMODULE_BRANCH=$SUBMODULE_BRANCH" >> $GITHUB_ENV
           echo "Checking out submodule branch: $SUBMODULE_BRANCH"
           git clone --depth=1 --branch "$SUBMODULE_BRANCH" https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
+
+      - name: Override Submodule Branches
+        run: |
+          SUBMODULE_OVERRIDES='${{ inputs.submodule_branches }}'
+          
+          if [[ "$SUBMODULE_OVERRIDES" == "{}" ]] || [[ -z "$SUBMODULE_OVERRIDES" ]]; then
+            echo "ℹNo submodule overrides specified, using default branches"
+            exit 0
+          fi
+          
+          echo "Processing submodule branch overrides..."
+          
+          # Validate JSON format
+          if ! echo "$SUBMODULE_OVERRIDES" | jq empty 2>/dev/null; then
+            echo "Invalid JSON format in submodule_branches input"
+            exit 1
+          fi
+          
+          cd "$ROOT/rust-bitvmx-workspace" || exit 1
+          
+          # Process each override
+          echo "$SUBMODULE_OVERRIDES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r SUBMODULE BRANCH; do
+            # Validate submodule and branch names
+            if [[ ! "$SUBMODULE" =~ ^[a-zA-Z0-9_\-]+$ ]] || [[ ${#SUBMODULE} -gt 100 ]]; then
+              echo "Skipping invalid submodule name: $SUBMODULE"
+              continue
+            fi
+            
+            if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9_\-\.\/]+$ ]] || [[ ${#BRANCH} -gt 100 ]]; then
+              echo "Skipping invalid branch name for $SUBMODULE: $BRANCH"
+              continue
+            fi
+            
+            if [[ ! -d "$SUBMODULE" ]]; then
+              echo "Submodule directory not found: $SUBMODULE (skipping)"
+              continue
+            fi
+            
+            echo "Overriding $SUBMODULE with branch: $BRANCH"
+            
+            # Remove existing submodule directory
+            rm -rf "$SUBMODULE"
+            
+            # Clone the specific branch
+            if git clone --depth=1 --branch "$BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>/dev/null; then
+              echo "Successfully checked out $SUBMODULE@$BRANCH"
+            else
+              echo "Failed to checkout $SUBMODULE@$BRANCH - branch may not exist"
+              exit 1
+            fi
+          done
+          
+          echo "All submodule overrides completed successfully"
 
       - name: Handle Submodules for Nightly Build
         run: |
