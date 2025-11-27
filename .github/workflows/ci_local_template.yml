@@ -203,13 +203,13 @@ jobs:
           # Process each override
           echo "$SUBMODULE_OVERRIDES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r SUBMODULE BRANCH; do
             # Validate submodule and branch names
-            if [[ ! "$SUBMODULE" =~ ^[a-zA-Z0-9_\-]+$ ]] || [[ ${#SUBMODULE} -gt 100 ]]; then
-              echo "Skipping invalid submodule name: $SUBMODULE"
+            if [[ ! "$SUBMODULE" =~ ^[a-zA-Z0-9_-]+$ ]] || [[ ${#SUBMODULE} -gt 100 ]]; then
+              echo "⚠️  Skipping invalid submodule name: $SUBMODULE"
               continue
             fi
             
-            if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9_\-\.\/]+$ ]] || [[ ${#BRANCH} -gt 100 ]]; then
-              echo "Skipping invalid branch name for $SUBMODULE: $BRANCH"
+            if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9_./-]+$ ]] || [[ ${#BRANCH} -gt 100 ]]; then
+              echo "⚠️  Skipping invalid branch name for $SUBMODULE: $BRANCH"
               continue
             fi
             
