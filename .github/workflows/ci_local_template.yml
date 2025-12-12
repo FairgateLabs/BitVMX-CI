@@ -88,21 +88,7 @@ jobs:
           [[ -z "${{ inputs.repo }}" ]] && ERRORS+=("'repo' input cannot be empty")
           [[ -z "${{ inputs.submodule_path }}" ]] && ERRORS+=("'submodule_path' input cannot be empty")
           [[ -z "${{ inputs.cargo_lock_path }}" ]] && ERRORS+=("'cargo_lock_path' input cannot be empty")
-          [[ -z "${{ inputs.target_path }}" ]] && ERRORS+=("'target_path' input cannot be empty")          
-          
-          if [[ ! "${{ inputs.repo }}" =~ ^[a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-]+$ ]]; then
-            ERRORS+=("'repo' must be in format 'owner/repo'")
-          fi
-          
-          if [[ ! "${{ inputs.submodule_path }}" =~ ^[a-zA-Z0-9_\-]+$ ]]; then
-            ERRORS+=("'submodule_path' contains invalid characters")
-          fi
-          
-          if [[ -n "${{ inputs.cargo_features }}" ]]; then
-            if [[ ! "${{ inputs.cargo_features }}" =~ ^[a-zA-Z0-9_,-]+$ ]]; then
-              ERRORS+=("'cargo_features' contains invalid characters")
-            fi
-          fi
+          [[ -z "${{ inputs.target_path }}" ]] && ERRORS+=("'target_path' input cannot be empty")
           
           if [[ "${{ inputs.docker_required }}" == "true" ]]; then
             [[ -z "${{ inputs.dockerfile_path }}" ]] && ERRORS+=("'dockerfile_path' required when docker_required=true")
@@ -146,20 +132,14 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ "$PR_TITLE" =~ ^\[([a-zA-Z0-9_\-\.\/]+)\] ]]; then
-            BRANCH_CANDIDATE="${BASH_REMATCH[1]}"
-            if [[ "$BRANCH_CANDIDATE" =~ ^[a-zA-Z0-9_\-\.\/]+$ ]] && [[ ${#BRANCH_CANDIDATE} -lt 100 ]]; then
-              SAFE_BRANCH="$BRANCH_CANDIDATE"
-            else
-              echo "⚠️  Invalid branch name in PR title, using main"
-              SAFE_BRANCH="main"
-            fi
+          if [[ "$PR_TITLE" =~ ^\[([^\]]+)\] ]]; then
+            SAFE_BRANCH="${BASH_REMATCH[1]}"
           else
             SAFE_BRANCH="main"
           fi
           
           echo "SAFE_BRANCH=$SAFE_BRANCH" >> $GITHUB_ENV
-          echo "✅ Using validated branch: $SAFE_BRANCH"
+          echo "✅ Using branch: $SAFE_BRANCH"
           
           git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
       
@@ -181,12 +161,12 @@ jobs:
         run: |
           SUBMODULE_OVERRIDES='${{ inputs.submodule_branches }}'
           
-          echo "🔍 Debug: Raw input value:"
+          echo "Debug: Raw input value:"
           echo "$SUBMODULE_OVERRIDES"
-          echo "🔍 Input length: ${#SUBMODULE_OVERRIDES}"
+          echo "Input length: ${#SUBMODULE_OVERRIDES}"
           
           if [[ "$SUBMODULE_OVERRIDES" == "{}" ]] || [[ -z "$SUBMODULE_OVERRIDES" ]]; then
-            echo "ℹ️  No submodule overrides specified, using default branches"
+            echo "No submodule overrides specified, using default branches"
             exit 0
           fi
           
@@ -202,17 +182,6 @@ jobs:
           
           # Process each override
           echo "$SUBMODULE_OVERRIDES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r SUBMODULE BRANCH; do
-            # Validate submodule and branch names
-            if [[ ! "$SUBMODULE" =~ ^[a-zA-Z0-9_-]+$ ]] || [[ ${#SUBMODULE} -gt 100 ]]; then
-              echo "⚠️  Skipping invalid submodule name: $SUBMODULE"
-              continue
-            fi
-            
-            if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9_./-]+$ ]] || [[ ${#BRANCH} -gt 100 ]]; then
-              echo "⚠️  Skipping invalid branch name for $SUBMODULE: $BRANCH"
-              continue
-            fi
-            
             if [[ ! -d "$SUBMODULE" ]]; then
               echo "Submodule directory not found: $SUBMODULE (skipping)"
               continue
