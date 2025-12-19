@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: '{}'
+      single_thread_tests:
+        description: 'Run tests with --test-threads=1'
+        required: false
+        type: boolean
+        default: false
     secrets:
       REPO_ACCESS_TOKEN:
         description: 'Token to access the repository'
@@ -363,14 +368,19 @@ jobs:
           echo "🧪 Running regular tests with cargo..."
 
           FEATURES="${{ inputs.cargo_features }}"
-          if [[ -n "$FEATURES" ]]; then
-            echo "📦 Using features: $FEATURES"
-            cargo test --verbose --features "$FEATURES"
-          else
-            echo "📦 Running tests without additional features"
-            cargo test --verbose
+          TEST_THREADS_FLAG=""
+          if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
+            TEST_THREADS_FLAG="-- --test-threads=1"
+            echo "🔧 Running tests with single thread"
           fi
-            fi
+
+          if [[ -n "$FEATURES" ]]; then
+            echo "Using features: $FEATURES"
+            cargo test --verbose --features "$FEATURES" $TEST_THREADS_FLAG
+          else
+            echo "Running tests without additional features"
+            cargo test --verbose $TEST_THREADS_FLAG
+          fi
         env:
           CI: true
           RUST_BACKTRACE: 1
