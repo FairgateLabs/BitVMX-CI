@@ -350,36 +350,37 @@ jobs:
         timeout-minutes: 90
         run: |
           if [[ "${{ inputs.nightly }}" == "true" ]]; then
-          echo "🌙 Running nightly tests with custom script..."
-
-          if [[ ! -f "scripts/run-tests.sh" ]]; then
-            echo "❌ Test script not found: scripts/run-tests.sh"
-            exit 1
-          fi
-
-          chmod +x scripts/run-tests.sh
-
-          SAFE_NIGHTLY="${{ inputs.nightly }}"
-          SAFE_DOCKER_COMPOSE="${{ inputs.docker_compose_path }}"
-          SAFE_FEATURES="${{ inputs.cargo_features }}"
-
-          timeout 2700 scripts/run-tests.sh "$SAFE_NIGHTLY" "$SAFE_DOCKER_COMPOSE" "$SAFE_FEATURES"
-            else
-          echo "🧪 Running regular tests with cargo..."
-
-          FEATURES="${{ inputs.cargo_features }}"
-          TEST_THREADS_FLAG=""
-          if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
-            TEST_THREADS_FLAG="-- --test-threads=1"
-            echo "🔧 Running tests with single thread"
-          fi
-
-          if [[ -n "$FEATURES" ]]; then
-            echo "Using features: $FEATURES"
-            cargo test --verbose --features "$FEATURES" $TEST_THREADS_FLAG
+            echo "🌙 Running nightly tests with custom script..."
+            
+            if [[ ! -f "scripts/run-tests.sh" ]]; then
+              echo "❌ Test script not found: scripts/run-tests.sh"
+              exit 1
+            fi
+            
+            chmod +x scripts/run-tests.sh
+            
+            SAFE_NIGHTLY="${{ inputs.nightly }}"
+            SAFE_DOCKER_COMPOSE="${{ inputs.docker_compose_path }}"
+            SAFE_FEATURES="${{ inputs.cargo_features }}"
+            
+            timeout 2700 scripts/run-tests.sh "$SAFE_NIGHTLY" "$SAFE_DOCKER_COMPOSE" "$SAFE_FEATURES"
           else
-            echo "Running tests without additional features"
-            cargo test --verbose $TEST_THREADS_FLAG
+            echo "🧪 Running regular tests with cargo..."
+            
+            FEATURES="${{ inputs.cargo_features }}"
+            TEST_THREADS_FLAG=""
+            if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
+              TEST_THREADS_FLAG="-- --test-threads=1"
+              echo "🔧 Running tests with single thread"
+            fi
+            
+            if [[ -n "$FEATURES" ]]; then
+              echo "📦 Using features: $FEATURES"
+              cargo test --verbose --features "$FEATURES" $TEST_THREADS_FLAG
+            else
+              echo "📦 Running tests without additional features"
+              cargo test --verbose $TEST_THREADS_FLAG
+            fi
           fi
         env:
           CI: true
