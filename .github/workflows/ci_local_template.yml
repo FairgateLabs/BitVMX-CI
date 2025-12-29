@@ -401,13 +401,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "${{ job.status == 'success' && '✅' || '❌' }} *GitHub Action Result* for `${{ github.repository }}`\n*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.SAFE_BRANCH }}`",
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} *GitHub Action Result* for `${{ github.repository }}`\n*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.BRANCH }}`",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.SAFE_BRANCH }}`"
+                    "text": "*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.BRANCH }}`"
                   }
                 }
               ]
