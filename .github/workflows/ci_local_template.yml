@@ -83,7 +83,7 @@ jobs:
     env:
       ROOT: "/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
       REPO_NAME: ${{ github.event.repository.name }}
-      BRANCH: ${{ github.head_ref || 'main' }}
+      BRANCH: ${{ github.head_ref || github.ref_name }}
 
     steps:
       - name: Validate Inputs
@@ -154,8 +154,8 @@ jobs:
             SUBMODULE_BRANCH="${{ github.head_ref }}"
             echo "✅ Using PR branch for submodule: $SUBMODULE_BRANCH"
           else
-            SUBMODULE_BRANCH="main"
-            echo "⚠️ No PR branch found (likely push to main), using main"
+            SUBMODULE_BRANCH="${{ github.ref_name }}"
+            echo "⚠️ No PR branch found (likely push to $SUBMODULE_BRANCH), using $SUBMODULE_BRANCH"
           fi
           
           echo "SUBMODULE_BRANCH=$SUBMODULE_BRANCH" >> $GITHUB_ENV
