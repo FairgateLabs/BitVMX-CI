@@ -1,4 +1,5 @@
-name: 'Template Test Action'
+name: 'CI Template for PRs'
+
 on:
   workflow_call:
     inputs:
@@ -31,10 +32,6 @@ on:
         description: 'Path to docker-compose file'
         required: false
         type: string
-      nightly:
-        description: 'Flag to determine if nightly triggered'
-        required: false
-        type: boolean
       cargo_features:
         description: 'Cargo features to enable (space or comma separated)'
         required: false
@@ -86,29 +83,6 @@ jobs:
       BRANCH: ${{ github.head_ref || github.ref_name }}
 
     steps:
-      - name: Validate Inputs
-        run: |
-          ERRORS=()          
-          
-          [[ -z "${{ inputs.repo }}" ]] && ERRORS+=("'repo' input cannot be empty")
-          [[ -z "${{ inputs.submodule_path }}" ]] && ERRORS+=("'submodule_path' input cannot be empty")
-          [[ -z "${{ inputs.cargo_lock_path }}" ]] && ERRORS+=("'cargo_lock_path' input cannot be empty")
-          [[ -z "${{ inputs.target_path }}" ]] && ERRORS+=("'target_path' input cannot be empty")
-          
-          if [[ "${{ inputs.docker_required }}" == "true" ]]; then
-            [[ -z "${{ inputs.dockerfile_path }}" ]] && ERRORS+=("'dockerfile_path' required when docker_required=true")
-            [[ -z "${{ inputs.docker_compose_path }}" ]] && ERRORS+=("'docker_compose_path' required when docker_required=true")
-          fi
-          
-          if [[ ${#ERRORS[@]} -gt 0 ]]; then
-            printf "❌ Validation errors:\n"
-            printf "  - %s\n" "${ERRORS[@]}"
-            exit 1
-          fi
-          echo "✅ All inputs validated successfully"
-
-      # This step is very time consuming. Uncomment only if space issues are encountered.
-      # Optionally, add a probe to check disk space and clean up only when necessary.
       - name: Cleanup Disk Space
         run: |
           echo "🧹 Cleaning up disk space..."
@@ -148,7 +122,7 @@ jobs:
           
           git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
       
-      - name: Checkout current repository
+      - name: Checkout Current Repository
         run: |
           if [[ -n "${{ github.head_ref }}" ]]; then
             SUBMODULE_BRANCH="${{ github.head_ref }}"
@@ -166,16 +140,12 @@ jobs:
         run: |
           SUBMODULE_OVERRIDES='${{ inputs.submodule_branches }}'
           
-          echo "Debug: Raw input value:"
-          echo "$SUBMODULE_OVERRIDES"
-          echo "Input length: ${#SUBMODULE_OVERRIDES}"
-          
           if [[ "$SUBMODULE_OVERRIDES" == "{}" ]] || [[ -z "$SUBMODULE_OVERRIDES" ]]; then
             echo "No submodule overrides specified, using default branches"
             exit 0
           fi
           
-          echo "🔄 Processing submodule branch overrides..."
+          echo "Processing submodule branch overrides..."
           
           # Validate JSON format
           if ! echo "$SUBMODULE_OVERRIDES" | jq empty 2>/dev/null; then
@@ -208,40 +178,22 @@ jobs:
           
           echo "All submodule overrides completed successfully"
 
-      - name: Handle Submodules for Nightly Build
+      - name: Reorganize Workspace Structure
         run: |
-          if [[ "$NIGHTLY" == "true" ]]; then
-            echo "Rearranging submodules for build"
-            cd "$ROOT/rust-bitvmx-workspace"
-            
-            if [[ -f ".cargo/config.toml" ]]; then
-              echo "Copying .cargo/config.toml to preserve patches"
-              mkdir -p "$ROOT/.cargo"
-              cp ".cargo/config.toml" "$ROOT/.cargo/"
-            fi
-            
-            for dir in */; do
-              name="${dir%/}"
-              if [[ "$name" != "${{ inputs.submodule_path }}" ]]; then
-                echo "Moving $name to $ROOT"
-                mv "$name" "$ROOT/"
-              fi
-            done
-            echo "Moved all other submodules to top-level"
-            rm -rf "$ROOT/rust-bitvmx-workspace"
-          else
-            echo "Running in submodule-triggered mode"
-            
-            if [[ -f "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace/.cargo/config.toml" ]]; then
-              echo "Copying .cargo/config.toml to preserve patches"
-              mkdir -p "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo"
-              cp "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace/.cargo/config.toml" "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo/"
-            fi
-            
-            find /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace -mindepth 1 -maxdepth 1 ! -name '${{ inputs.submodule_path }}' -exec mv {} /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/ \;
+          echo "Reorganizing workspace for PR build..."
+          cd "$ROOT/rust-bitvmx-workspace"
+          
+          if [[ -f ".cargo/config.toml" ]]; then
+            echo "Copying .cargo/config.toml to preserve patches"
+            mkdir -p "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo"
+            cp ".cargo/config.toml" "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo/"
           fi
-        env:
-          NIGHTLY: ${{ inputs.nightly }}
+          
+          find /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace \
+            -mindepth 1 -maxdepth 1 ! -name '${{ inputs.submodule_path }}' \
+            -exec mv {} /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/ \;
+          
+          echo "✅ Workspace reorganization completed"
 
       - name: Install Rust Toolchain
         uses: actions-rs/toolchain@v1
@@ -282,14 +234,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Cache Workspace Target Directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-workspace-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-workspace-target-
-
       - name: Cache Submodule Target Directory
         uses: actions/cache@v4
         with:
@@ -314,16 +258,18 @@ jobs:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
           restore-keys: |
-              ${{ runner.os }}-buildx-
+            ${{ runner.os }}-buildx-
 
-      - name: Build and push Docker image        
+      - name: Build Docker image        
         if: ${{ inputs.docker_required }}
         uses: docker/build-push-action@v5
         with:
           context: ./${{ inputs.submodule_path }}
           file: ./${{ inputs.submodule_path }}/${{ inputs.dockerfile_path }}
-          push: false  # Build locally
+          push: false
           tags: test-image:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
       - name: Run docker-compose
         if: ${{ inputs.docker_required }}
@@ -343,49 +289,39 @@ jobs:
           fi
           
           chmod +x scripts/build-emulator.sh
-          timeout 600 scripts/build-emulator.sh  # 10 min timeout
+          timeout 600 scripts/build-emulator.sh
       
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
         timeout-minutes: 90
         run: |
-          if [[ "${{ inputs.nightly }}" == "true" ]]; then
-            echo "🌙 Running nightly tests with custom script..."
-            
-            if [[ ! -f "scripts/run-tests.sh" ]]; then
-              echo "❌ Test script not found: scripts/run-tests.sh"
-              exit 1
-            fi
-            
-            chmod +x scripts/run-tests.sh
-            
-            SAFE_NIGHTLY="${{ inputs.nightly }}"
-            SAFE_DOCKER_COMPOSE="${{ inputs.docker_compose_path }}"
-            SAFE_FEATURES="${{ inputs.cargo_features }}"
-            
-            timeout 2700 scripts/run-tests.sh "$SAFE_NIGHTLY" "$SAFE_DOCKER_COMPOSE" "$SAFE_FEATURES"
+          echo "🧪 Running tests..."
+          
+          FEATURES="${{ inputs.cargo_features }}"
+          TEST_THREADS_FLAG=""
+          
+          if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
+            TEST_THREADS_FLAG="-- --test-threads=1"
+            echo "🔧 Running tests with single thread"
+          fi
+          
+          if [[ -n "$FEATURES" ]]; then
+            echo "📦 Using features: $FEATURES"
+            cargo test --verbose --features "$FEATURES" $TEST_THREADS_FLAG
           else
-            echo "🧪 Running regular tests with cargo..."
-            
-            FEATURES="${{ inputs.cargo_features }}"
-            TEST_THREADS_FLAG=""
-            if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
-              TEST_THREADS_FLAG="-- --test-threads=1"
-              echo "🔧 Running tests with single thread"
-            fi
-            
-            if [[ -n "$FEATURES" ]]; then
-              echo "📦 Using features: $FEATURES"
-              cargo test --verbose --features "$FEATURES" $TEST_THREADS_FLAG
-            else
-              echo "📦 Running tests without additional features"
-              cargo test --verbose $TEST_THREADS_FLAG
-            fi
+            echo "📦 Running tests without additional features"
+            cargo test --verbose $TEST_THREADS_FLAG
           fi
         env:
           CI: true
           RUST_BACKTRACE: 1
           RUST_LOG: info
+
+      - name: Move Docker cache
+        if: always() && inputs.docker_required
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
 
       - name: Cleanup
         if: always()
@@ -401,13 +337,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "${{ job.status == 'success' && '✅' || '❌' }} *GitHub Action Result* for `${{ github.repository }}`\n*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.BRANCH }}`",
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} *CI Result* for `${{ github.repository }}`\n*${{ github.workflow }}* job has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.BRANCH }}`",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*${{ github.workflow }}* job `${{ github.job }}` has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n*Branch:* `${{ env.BRANCH }}`"
+                    "text": "${{ job.status == 'success' && '✅' || '❌' }} *CI Build*\n*Status:* ${{ job.status }}\n*Repository:* `${{ github.repository }}`\n*Branch:* `${{ env.BRANCH }}`\n*Author:* ${{ github.event.pull_request.user.login || github.actor }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>"
                   }
                 }
               ]
