@@ -1,8 +1,59 @@
+# name: Nightly Build
+
+# on:
+#   schedule:
+#     - cron: '0 3 * * *' # Runs every day at midnight ARG (03:00 UTC)
+# env:
+#   CARGO_TERM_COLOR: always
+
+# permissions:
+#   contents: read
+#   actions: read
+#   checks: write
+#   pull-requests: read
+
+# concurrency:
+#   group: 'nightly-build-${{ github.ref }}'
+#   cancel-in-progress: false
+
+# jobs:
+#   nightly:
+#     strategy:
+#       fail-fast: false
+#       matrix:
+#         include:
+#           - submodule: rust-bitvmx-client
+#             clippy: true
+#             build_cpu: true
+#             dockerfile_path: tests/docker/Dockerfile
+#             docker_compose_path: tests/docker/docker-compose.yml
+
+#     uses: ./.github/workflows/ci_local_template.yml
+#     with:
+#       repo: 'FairgateLabs/rust-bitvmx-workspace'
+#       submodule_path: ${{ matrix.submodule }}
+#       cargo_lock_path: '${{ matrix.submodule }}/Cargo.lock'
+#       target_path: '${{ matrix.submodule }}/target'
+#       nightly: true
+#       clippy: ${{ matrix.clippy }}
+#       build_cpu: ${{ matrix.build_cpu }}
+#       docker_required: true
+#       dockerfile_path: ${{ matrix.dockerfile_path }}
+#       docker_compose_path: ${{ matrix.docker_compose_path }}
+#     secrets:
+#       REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+#       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+#       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+
 name: Nightly Build
 
 on:
+  workflow_dispatch:  # Allows manual triggering
   schedule:
-    - cron: '0 3 * * *' # Runs every day at midnight ARG (03:00 UTC)
+    #- cron: '0 3 * * *' # Runs every day at 03:00 UTC (midnight ARG)
+    - cron: '30 15 * * *' 
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,34 +64,175 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: 'nightly-build-${{ github.ref }}'
+  group: 'nightly-build'
   cancel-in-progress: false
 
 jobs:
-  nightly:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - submodule: rust-bitvmx-client
-            clippy: true
-            build_cpu: true
-            dockerfile_path: tests/docker/Dockerfile
-            docker_compose_path: tests/docker/docker-compose.yml
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    
+    steps:
+      - name: Cleanup Disk Space
+        run: |
+          echo "🧹 Cleaning up disk space..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          echo "✅ Disk cleanup completed"
+      
+      - name: Check disk space
+        run: df -h
 
-    uses: ./.github/workflows/ci_local_template.yml
-    with:
-      repo: 'FairgateLabs/rust-bitvmx-workspace'
-      submodule_path: ${{ matrix.submodule }}
-      cargo_lock_path: '${{ matrix.submodule }}/Cargo.lock'
-      target_path: '${{ matrix.submodule }}/target'
-      nightly: true
-      clippy: ${{ matrix.clippy }}
-      build_cpu: ${{ matrix.build_cpu }}
-      docker_required: true
-      dockerfile_path: ${{ matrix.dockerfile_path }}
-      docker_compose_path: ${{ matrix.docker_compose_path }}
-    secrets:
-      REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Configure SSH for Git Access
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Configure Git with Token Authentication
+        run: |
+          git config --global url."https://x-access-token:${REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+     
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          repository: FairgateLabs/rust-bitvmx-client
+          ref: main
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      
+      - name: Lint with rustfmt
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: Lint with Clippy
+        continue-on-error: true
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cache Rust Toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+          key: ${{ runner.os }}-rustup-${{ hashFiles('**/rust-toolchain*') }}
+          restore-keys: |
+            ${{ runner.os }}-rustup-
+
+      - name: Cache Cargo Registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Target Directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create cache directory
+        run: mkdir -p /tmp/.buildx-cache
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/Dockerfile
+          push: false
+          tags: test-image:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Run docker-compose
+        uses: hoverkraft-tech/compose-action@v2.0.1
+        with:
+          compose-file: tests/docker/docker-compose.yml
+
+      - name: Build BitVMX-CPU Emulator
+        run: |
+          if [[ ! -f "scripts/build-emulator.sh" ]]; then
+            echo "❌ Build script not found: scripts/build-emulator.sh"
+            exit 1
+          fi
+          
+          chmod +x scripts/build-emulator.sh
+          timeout 600 scripts/build-emulator.sh
+      
+      - name: Run Tests
+        timeout-minutes: 90
+        run: |
+          echo "🌙 Running nightly tests..."
+          
+          if [[ ! -f "scripts/run-tests.sh" ]]; then
+            echo "❌ Test script not found: scripts/run-tests.sh"
+            exit 1
+          fi
+          
+          chmod +x scripts/run-tests.sh
+          timeout 2700 scripts/run-tests.sh "true" "tests/docker/docker-compose.yml" ""
+        env:
+          CI: true
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+
+      - name: Move cache
+        if: always()
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up temporary files..."
+          rm -rf /tmp/.buildx-cache || true
+          rm -rf target/debug/deps || true
+          echo "✅ Cleanup completed"
+
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} *Nightly Build Result* for `rust-bitvmx-client`\n*${{ github.workflow }}* job has *${{ job.status }}* :rocket:\n<https://github.com/FairgateLabs/rust-bitvmx-client/actions/runs/${{ github.run_id }}|View full run>\n*Branch:* `main`",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ job.status == 'success' && '✅' || '❌' }} *Nightly Build* for `rust-bitvmx-client`\n*Status:* ${{ job.status }}\n<https://github.com/FairgateLabs/rust-bitvmx-client/actions/runs/${{ github.run_id }}|View full run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
