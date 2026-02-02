@@ -1,58 +1,9 @@
-# name: Nightly Build
-
-# on:
-#   schedule:
-#     - cron: '0 3 * * *' # Runs every day at midnight ARG (03:00 UTC)
-# env:
-#   CARGO_TERM_COLOR: always
-
-# permissions:
-#   contents: read
-#   actions: read
-#   checks: write
-#   pull-requests: read
-
-# concurrency:
-#   group: 'nightly-build-${{ github.ref }}'
-#   cancel-in-progress: false
-
-# jobs:
-#   nightly:
-#     strategy:
-#       fail-fast: false
-#       matrix:
-#         include:
-#           - submodule: rust-bitvmx-client
-#             clippy: true
-#             build_cpu: true
-#             dockerfile_path: tests/docker/Dockerfile
-#             docker_compose_path: tests/docker/docker-compose.yml
-
-#     uses: ./.github/workflows/ci_local_template.yml
-#     with:
-#       repo: 'FairgateLabs/rust-bitvmx-workspace'
-#       submodule_path: ${{ matrix.submodule }}
-#       cargo_lock_path: '${{ matrix.submodule }}/Cargo.lock'
-#       target_path: '${{ matrix.submodule }}/target'
-#       nightly: true
-#       clippy: ${{ matrix.clippy }}
-#       build_cpu: ${{ matrix.build_cpu }}
-#       docker_required: true
-#       dockerfile_path: ${{ matrix.dockerfile_path }}
-#       docker_compose_path: ${{ matrix.docker_compose_path }}
-#     secrets:
-#       REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
-#       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-#       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-
 name: Nightly Build
 
 on:
   workflow_dispatch:  # Allows manual triggering
   schedule:
-    #- cron: '0 3 * * *' # Runs every day at 03:00 UTC (midnight ARG)
-    - cron: '30 15 * * *' 
+    - cron: '0 3 * * *'  # Runs every day at 03:00 UTC (midnight ARG)
 
 env:
   CARGO_TERM_COLOR: always
@@ -102,6 +53,21 @@ jobs:
         with:
           repository: FairgateLabs/rust-bitvmx-client
           ref: main
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+
+      - name: Clone BitVMX-CPU
+        run: |
+          echo "Cloning BitVMX-CPU repository..."
+          cd ..
+          git clone --depth=1 --branch main https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/FairgateLabs/BitVMX-CPU.git BitVMX-CPU
+          echo "✅ BitVMX-CPU cloned successfully"
+
+      - name: Clone RISC-V Build Artifacts
+        run: |
+          echo "Cloning bitvmx-docker-riscv32 repository..."
+          cd ../BitVMX-CPU
+          git clone --depth=1 --branch main https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/FairgateLabs/bitvmx-docker-riscv32.git docker-riscv32
+          echo "✅ RISC-V build artifacts ready"
 
       - name: Install Rust Toolchain
         uses: actions-rs/toolchain@v1
