@@ -1,6 +1,7 @@
 name: 'CI Template for PRs'
 
 on:
+  workflow_dispatch:  # Allows manual triggering
   workflow_call:
     inputs:
       repo: 
@@ -45,11 +46,6 @@ on:
         required: false
         type: boolean
         default: false
-      submodule_branches:
-        description: 'JSON map of submodule overrides: {"submodule-name": "branch-name"}'
-        required: false
-        type: string
-        default: '{}'
       single_thread_tests:
         description: 'Run tests with --test-threads=1'
         required: false
@@ -136,47 +132,65 @@ jobs:
           echo "Checking out submodule branch: $SUBMODULE_BRANCH"
           git clone --depth=1 --branch "$SUBMODULE_BRANCH" https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
 
-      - name: Override Submodule Branches
+      - name: Override Submodule Branches from PR Description
         run: |
-          SUBMODULE_OVERRIDES='${{ inputs.submodule_branches }}'
+          PR_BODY='${{ github.event.pull_request.body }}'
           
-          if [[ "$SUBMODULE_OVERRIDES" == "{}" ]] || [[ -z "$SUBMODULE_OVERRIDES" ]]; then
-            echo "No submodule overrides specified, using default branches"
+          if [[ -z "$PR_BODY" ]]; then
+            echo "OVERRIDDEN_MODULES=" >> $GITHUB_ENV
             exit 0
           fi
           
-          echo "Processing submodule branch overrides..."
-          
-          # Validate JSON format
-          if ! echo "$SUBMODULE_OVERRIDES" | jq empty 2>/dev/null; then
-            echo "Invalid JSON format in submodule_branches input"
-            exit 1
-          fi
+          FOUND_ANY=false
+          declare -A OVERRIDES
+          OVERRIDDEN_MODULES=""
           
           cd "$ROOT/rust-bitvmx-workspace" || exit 1
           
-          # Process each override
-          echo "$SUBMODULE_OVERRIDES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r SUBMODULE BRANCH; do
-            if [[ ! -d "$SUBMODULE" ]]; then
-              echo "Submodule directory not found: $SUBMODULE (skipping)"
-              continue
+          while IFS= read -r line; do
+            line=$(echo "$line" | tr -d '\r\n' | xargs)
+            [[ -z "$line" ]] && continue
+            
+            if [[ "${line,,}" == override:* ]]; then
+              line="${line#*:}"
+              line=$(echo "$line" | xargs)
+              
+              if [[ "$line" == *":"* ]]; then
+                REPO="${line%%:*}"
+                BRANCH="${line#*:}"
+                REPO=$(echo "$REPO" | tr -d '\r\n' | xargs)
+                BRANCH=$(echo "$BRANCH" | tr -d '\r\n' | xargs)
+                
+                [[ -z "$REPO" || -z "$BRANCH" ]] && continue
+                
+                if [[ -d "$REPO" ]]; then
+                  OVERRIDES["$REPO"]="$BRANCH"
+                  FOUND_ANY=true
+                  OVERRIDDEN_MODULES="$OVERRIDDEN_MODULES $REPO"
+                  echo "Override: $REPO -> $BRANCH"
+                fi
+              fi
             fi
-            
-            echo "Overriding $SUBMODULE with branch: $BRANCH"
-            
-            # Remove existing submodule directory
+          done <<< "$PR_BODY"
+          
+          if [[ "$FOUND_ANY" == "false" ]]; then
+            echo "OVERRIDDEN_MODULES=" >> $GITHUB_ENV
+            exit 0
+          fi
+          
+          echo "OVERRIDDEN_MODULES=$OVERRIDDEN_MODULES" >> $GITHUB_ENV
+          
+          for SUBMODULE in "${!OVERRIDES[@]}"; do
+            BRANCH="${OVERRIDES[$SUBMODULE]}"
             rm -rf "$SUBMODULE"
             
-            # Clone the specific branch
-            if git clone --depth=1 --branch "$BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>/dev/null; then
-              echo "Successfully checked out $SUBMODULE@$BRANCH"
+            if git clone --depth=1 --branch "$BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
+              echo "✅ $SUBMODULE@$BRANCH"
             else
-              echo "Failed to checkout $SUBMODULE@$BRANCH - branch may not exist"
+              echo "❌ Failed to clone $SUBMODULE@$BRANCH"
               exit 1
             fi
           done
-          
-          echo "All submodule overrides completed successfully"
 
       - name: Reorganize Workspace Structure
         run: |
@@ -185,8 +199,7 @@ jobs:
           
           if [[ -f ".cargo/config.toml" ]]; then
             echo "Copying .cargo/config.toml to preserve patches"
-            mkdir -p "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo"
-            cp ".cargo/config.toml" "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo/"
+            cp -f ".cargo/config.toml" "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo/config.toml" 2>/dev/null || true
           fi
           
           find /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace \
@@ -194,6 +207,21 @@ jobs:
             -exec mv {} /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/ \;
           
           echo "✅ Workspace reorganization completed"
+
+      - name: Verify Submodule Overrides
+        if: env.OVERRIDDEN_MODULES != ''
+        run: |
+          echo "Verifying overridden submodules:"
+          
+          for SUBMODULE in $OVERRIDDEN_MODULES; do
+            if [[ -d "$SUBMODULE/.git" ]]; then
+              cd "$SUBMODULE"
+              BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+              COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+              echo "✅ $SUBMODULE: $BRANCH @ $COMMIT"
+              cd ..
+            fi
+          done
 
       - name: Install Rust Toolchain
         uses: actions-rs/toolchain@v1

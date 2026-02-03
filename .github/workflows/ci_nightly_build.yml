@@ -189,13 +189,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "${{ job.status == 'success' && '✅' || '❌' }} *Nightly Build Result* for `rust-bitvmx-client`\n*${{ github.workflow }}* job has *${{ job.status }}* :rocket:\n<https://github.com/FairgateLabs/rust-bitvmx-client/actions/runs/${{ github.run_id }}|View full run>\n*Branch:* `main`",
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} *Nightly Build Result* for `rust-bitvmx-client`\n*${{ github.workflow }}* job has *${{ job.status }}* :rocket:\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>\n*Branch:* `main`",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ job.status == 'success' && '✅' || '❌' }} *Nightly Build* for `rust-bitvmx-client`\n*Status:* ${{ job.status }}\n<https://github.com/FairgateLabs/rust-bitvmx-client/actions/runs/${{ github.run_id }}|View full run>"
+                    "text": "${{ job.status == 'success' && '✅' || '❌' }} *Nightly Build* for `rust-bitvmx-client`\n*Status:* ${{ job.status }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View full run>"
                   }
                 }
               ]
