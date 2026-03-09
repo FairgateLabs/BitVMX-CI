@@ -134,7 +134,10 @@ jobs:
 
       - name: Override Submodule Branches from PR Description
         run: |
-          PR_BODY='${{ github.event.pull_request.body }}'
+          PR_BODY=$(cat <<'EOF'
+          ${{ github.event.pull_request.body }}
+          EOF
+          )
           
           if [[ -z "$PR_BODY" ]]; then
             echo "OVERRIDDEN_MODULES=" >> $GITHUB_ENV
