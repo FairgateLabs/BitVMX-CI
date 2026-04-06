@@ -51,6 +51,15 @@ on:
         required: false
         type: boolean
         default: false
+      measure_coverage:
+        description: 'Whether to measure code coverage (default: true). Set to false to skip coverage.'
+        required: false
+        type: boolean
+        default: true
+      coverage_exclude:
+        description: 'Comma or space separated path patterns (regex) to exclude from coverage (e.g. "tests/,benches/,examples/")'
+        required: false
+        type: string
     secrets:
       REPO_ACCESS_TOKEN:
         description: 'Token to access the repository'
@@ -66,7 +75,7 @@ permissions:
   contents: read
   actions: read
   checks: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   test:
@@ -232,6 +241,13 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        if: ${{ inputs.measure_coverage }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       
       - name: Lint with rustfmt
         continue-on-error: true
@@ -327,26 +343,108 @@ jobs:
         timeout-minutes: 90
         run: |
           echo "🧪 Running tests..."
-          
+
           FEATURES="${{ inputs.cargo_features }}"
-          TEST_THREADS_FLAG=""
-          
-          if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
-            TEST_THREADS_FLAG="-- --test-threads=1"
-            echo "🔧 Running tests with single thread"
-          fi
-          
+
+          # Build cargo args array
+          CARGO_ARGS=()
           if [[ -n "$FEATURES" ]]; then
             echo "📦 Using features: $FEATURES"
-            cargo test --verbose --features "$FEATURES" $TEST_THREADS_FLAG
+            CARGO_ARGS+=(--features "$FEATURES")
           else
             echo "📦 Running tests without additional features"
-            cargo test --verbose $TEST_THREADS_FLAG
+          fi
+
+          # Build test binary args array
+          TEST_ARGS=()
+          if [[ "${{ inputs.single_thread_tests }}" == "true" ]]; then
+            echo "🔧 Running tests with single thread"
+            TEST_ARGS+=(-- --test-threads=1)
+          fi
+
+          if [[ "${{ inputs.measure_coverage }}" != "false" ]]; then
+            echo "📊 Running tests with coverage measurement..."
+
+            # Build exclude regex from comma/space separated list
+            RAW_EXCLUDE="${{ inputs.coverage_exclude }}"
+            if [[ -n "$RAW_EXCLUDE" ]]; then
+              EXCLUDE_REGEX=$(echo "$RAW_EXCLUDE" | tr ', ' '\n' | grep -v '^$' | paste -sd'|' -)
+              echo "🚫 Excluding from coverage: $EXCLUDE_REGEX"
+              CARGO_ARGS+=(--ignore-filename-regex "$EXCLUDE_REGEX")
+            fi
+
+            cargo llvm-cov \
+              --verbose \
+              --json --summary-only --output-path coverage-summary.json \
+              "${CARGO_ARGS[@]}" "${TEST_ARGS[@]}"
+          else
+            echo "⏭️ Skipping coverage measurement"
+            cargo test --verbose "${CARGO_ARGS[@]}" "${TEST_ARGS[@]}"
           fi
         env:
           CI: true
           RUST_BACKTRACE: 1
           RUST_LOG: info
+
+      - name: Post Coverage Comment on PR
+        if: ${{ inputs.measure_coverage && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summaryPath = '${{ inputs.submodule_path }}/coverage-summary.json';
+
+            if (!fs.existsSync(summaryPath)) {
+              console.log('No coverage-summary.json found, skipping comment.');
+              return;
+            }
+
+            const data = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            const totals = data.data[0].totals;
+
+            const badge = (pct) => pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
+            const fmt   = (metric) => `${metric.covered}/${metric.count} (${metric.percent.toFixed(1)}%)`;
+            const pct   = (metric) => metric.percent;
+
+            const lines     = totals.lines;
+            const functions = totals.functions;
+            const branches  = totals.branches;
+
+            let body = `<!-- coverage-report -->\n## 📊 Coverage Report\n\n`;
+            body += `| Metric | Covered / Total | % |\n`;
+            body += `|--------|-----------------|---|\n`;
+            body += `| ${badge(pct(lines))} Lines | ${fmt(lines)} | ${pct(lines).toFixed(1)}% |\n`;
+            body += `| ${badge(pct(functions))} Functions | ${fmt(functions)} | ${pct(functions).toFixed(1)}% |\n`;
+            if (branches && branches.count > 0) {
+              body += `| ${badge(pct(branches))} Branches | ${fmt(branches)} | ${pct(branches).toFixed(1)}% |\n`;
+            }
+            body += `\n> Workflow run: [#${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            const marker = '<!-- coverage-report -->';
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.data.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              console.log('Coverage comment updated.');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              console.log('Coverage comment created.');
+            }
 
       - name: Move Docker cache
         if: always() && inputs.docker_required
