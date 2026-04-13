@@ -3,7 +3,8 @@ name: Nightly Build
 on:
   workflow_dispatch:  # Allows manual triggering
   schedule:
-    - cron: '0 3 * * *'  # Runs every day at 03:00 UTC (midnight ARG)
+    # - cron: '0 3 * * *'  # Runs every day at 03:00 UTC (midnight ARG)
+    - cron: '12 14 13 4 *'  # TEMP: one-time run at 14:12 UTC on April 13
 
 env:
   CARGO_TERM_COLOR: always
