@@ -34,7 +34,6 @@ jobs:
       submodule_path: ${{ matrix.submodule }}
       cargo_lock_path: '${{ matrix.submodule }}/Cargo.lock'
       target_path: '${{ matrix.submodule }}/target'
-      nightly: true
       clippy: ${{ matrix.clippy }}
       build_cpu: ${{ matrix.build_cpu }}
       docker_required: true

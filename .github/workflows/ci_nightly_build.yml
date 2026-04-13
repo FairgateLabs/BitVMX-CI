@@ -48,26 +48,11 @@ jobs:
         env:
           REPO_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
      
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          repository: FairgateLabs/rust-bitvmx-client
-          ref: main
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-
-      - name: Clone BitVMX-CPU
+      - name: Checkout Workspace Repository
         run: |
-          echo "Cloning BitVMX-CPU repository..."
-          cd ..
-          git clone --depth=1 --branch main https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/FairgateLabs/BitVMX-CPU.git BitVMX-CPU
-          echo "✅ BitVMX-CPU cloned successfully"
-
-      - name: Clone RISC-V Build Artifacts
-        run: |
-          echo "Cloning bitvmx-docker-riscv32 repository..."
-          cd ../BitVMX-CPU
-          git clone --depth=1 --branch main https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/FairgateLabs/bitvmx-docker-riscv32.git docker-riscv32
-          echo "✅ RISC-V build artifacts ready"
+          echo "Cloning rust-bitvmx-workspace with submodules..."
+          git clone --recurse-submodules --depth=1 --branch main --shallow-submodules https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/FairgateLabs/rust-bitvmx-workspace rust-bitvmx-workspace
+          echo "✅ Workspace cloned successfully"
 
       - name: Install Rust Toolchain
         uses: actions-rs/toolchain@v1
@@ -78,10 +63,12 @@ jobs:
       
       - name: Lint with rustfmt
         continue-on-error: true
+        working-directory: rust-bitvmx-workspace/rust-bitvmx-client
         run: cargo fmt --all -- --check
 
       - name: Lint with Clippy
         continue-on-error: true
+        working-directory: rust-bitvmx-workspace/rust-bitvmx-client
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Cache Rust Toolchain
@@ -130,8 +117,8 @@ jobs:
       - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: tests/docker/Dockerfile
+          context: ./rust-bitvmx-workspace/rust-bitvmx-client
+          file: ./rust-bitvmx-workspace/rust-bitvmx-client/tests/docker/Dockerfile
           push: false
           tags: test-image:latest
           cache-from: type=local,src=/tmp/.buildx-cache
@@ -140,9 +127,10 @@ jobs:
       - name: Run docker-compose
         uses: hoverkraft-tech/compose-action@v2.0.1
         with:
-          compose-file: tests/docker/docker-compose.yml
+          compose-file: ./rust-bitvmx-workspace/rust-bitvmx-client/tests/docker/docker-compose.yml
 
       - name: Build BitVMX-CPU Emulator
+        working-directory: rust-bitvmx-workspace/rust-bitvmx-client
         run: |
           if [[ ! -f "scripts/build-emulator.sh" ]]; then
             echo "❌ Build script not found: scripts/build-emulator.sh"
@@ -153,6 +141,7 @@ jobs:
           timeout 600 scripts/build-emulator.sh
       
       - name: Run Tests
+        working-directory: rust-bitvmx-workspace/rust-bitvmx-client
         timeout-minutes: 90
         run: |
           echo "🌙 Running nightly tests..."
@@ -180,7 +169,7 @@ jobs:
         run: |
           echo "🧹 Cleaning up temporary files..."
           rm -rf /tmp/.buildx-cache || true
-          rm -rf target/debug/deps || true
+          rm -rf rust-bitvmx-workspace/rust-bitvmx-client/target/debug/deps || true
           echo "✅ Cleanup completed"
 
       - name: Notify Slack
