@@ -1,6 +1,7 @@
 name: Weekly Build
 
 on:
+  workflow_dispatch:  # Allows manual triggering
   schedule:
     - cron: '0 0 * * 3' # This runs only on THURSDAYS at midnight
 env:
