@@ -56,6 +56,21 @@ on:
         required: false
         type: boolean
         default: true
+      use_workspace_submodule:
+        description: 'Use the submodule as pinned in the workspace instead of checking out the submodule repo directly (e.g. for weekly builds)'
+        required: false
+        type: boolean
+        default: false
+      workspace_branch:
+        description: 'Branch of the workspace repository to clone (default: main)'
+        required: false
+        type: string
+        default: 'main'
+      submodules_branch:
+        description: 'Checkout all submodules to this branch and enable local patches (e.g. dev). If empty, submodules stay as pinned in workspace.'
+        required: false
+        type: string
+        default: ''
       coverage_exclude:
         description: 'Comma or space separated path patterns (regex) to exclude from coverage (e.g. "tests/,benches/,examples/")'
         required: false
@@ -116,7 +131,9 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ "$PR_TITLE" =~ ^\[([^\]]+)\] ]]; then
+          if [[ -n "${{ inputs.workspace_branch }}" && "${{ inputs.workspace_branch }}" != "main" ]]; then
+            SAFE_BRANCH="${{ inputs.workspace_branch }}"
+          elif [[ "$PR_TITLE" =~ ^\[([^\]]+)\] ]]; then
             SAFE_BRANCH="${BASH_REMATCH[1]}"
           else
             SAFE_BRANCH="main"
@@ -126,8 +143,66 @@ jobs:
           echo "✅ Using branch: $SAFE_BRANCH"
           
           git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
+
+      - name: Switch Submodules to Branch
+        if: ${{ inputs.submodules_branch != '' }}
+        run: |
+          TARGET_BRANCH="${{ inputs.submodules_branch }}"
+          echo "🔀 Switching all submodules to branch: $TARGET_BRANCH"
+          cd "$ROOT/rust-bitvmx-workspace"
+          
+          for dir in */; do
+            dir="${dir%/}"
+            if [[ -d "$dir/.git" || -f "$dir/.git" ]]; then
+              echo "Switching $dir to $TARGET_BRANCH..."
+              cd "$dir"
+              REMOTE_URL="https://github.com/FairgateLabs/${dir}.git"
+              if git fetch "$REMOTE_URL" "$TARGET_BRANCH" --depth=1 2>&1 && \
+                 git checkout FETCH_HEAD 2>&1; then
+                echo "✅ $dir -> $TARGET_BRANCH"
+              else
+                echo "⚠️ $dir: branch $TARGET_BRANCH not found, keeping current"
+              fi
+              cd "$ROOT/rust-bitvmx-workspace"
+            fi
+          done
+          
+          echo "🔧 Adding [patch] sections to ${{ inputs.submodule_path }}/Cargo.toml..."
+          if [[ -f ".cargo/config.toml" ]]; then
+            CLIENT_CARGO="${{ inputs.submodule_path }}/Cargo.toml"
+            ACTIVE=""
+            
+            while IFS= read -r line; do
+              # Patch section header: #[patch."https://..."]
+              if [[ "$line" =~ ^#\[patch\.\"([^\"]+)\"\] ]]; then
+                URL="${BASH_REMATCH[1]}"
+                # Strip .git suffix for matching (Cargo.toml and config.toml may differ)
+                URL_BASE="${URL%.git}"
+                # Only include if the client actually depends on this URL
+                if grep -qF "$URL_BASE" "$CLIENT_CARGO" 2>/dev/null; then
+                  ACTIVE="yes"
+                  echo "" >> "$CLIENT_CARGO"
+                  echo "${line#\#}" >> "$CLIENT_CARGO"
+                  echo "  ✅ Including patch for $URL"
+                else
+                  ACTIVE=""
+                  echo "  ⏭️ Skipping patch for $URL (not used by client)"
+                fi
+              # Crate line inside an active section: #crate-name = { path = "..." }
+              elif [[ -n "$ACTIVE" && "$line" =~ ^#[a-zA-Z] ]]; then
+                echo "${line#\#}" | sed 's|path = "\([^"]*\)"|path = "../\1"|g' >> "$CLIENT_CARGO"
+              fi
+            done < .cargo/config.toml
+            
+            echo "✅ Patches added to Cargo.toml"
+            echo "--- Patched Cargo.toml tail ---"
+            tail -60 "$CLIENT_CARGO"
+          else
+            echo "⚠️ No .cargo/config.toml found"
+          fi
       
       - name: Checkout Current Repository
+        if: ${{ !inputs.use_workspace_submodule }}
         run: |
           if [[ -n "${{ github.head_ref }}" ]]; then
             SUBMODULE_BRANCH="${{ github.head_ref }}"
@@ -209,16 +284,26 @@ jobs:
           echo "Reorganizing workspace for PR build..."
           cd "$ROOT/rust-bitvmx-workspace"
           
-          if [[ -f ".cargo/config.toml" ]]; then
+          if [[ -f ".cargo/config.toml" && -z "${{ inputs.submodules_branch }}" ]]; then
             echo "Copying .cargo/config.toml to preserve patches"
-            cp -f ".cargo/config.toml" "/home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/.cargo/config.toml" 2>/dev/null || true
+            mkdir -p "$ROOT/${{ inputs.submodule_path }}/.cargo"
+            cp -f ".cargo/config.toml" "$ROOT/${{ inputs.submodule_path }}/.cargo/config.toml" 2>/dev/null || true
+          else
+            echo "Skipping .cargo/config.toml copy (patches handled via Cargo.toml)"
           fi
           
-          find /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/rust-bitvmx-workspace \
+          find "$ROOT/rust-bitvmx-workspace" \
             -mindepth 1 -maxdepth 1 ! -name '${{ inputs.submodule_path }}' \
-            -exec mv {} /home/runner/work/${{ inputs.submodule_path }}/${{ inputs.submodule_path }}/ \;
+            -exec mv {} "$ROOT/" \;
           
           echo "✅ Workspace reorganization completed"
+
+      - name: Move Workspace Submodule to Root
+        if: ${{ inputs.use_workspace_submodule }}
+        run: |
+          echo "Moving ${{ inputs.submodule_path }} from workspace to root..."
+          mv "$ROOT/rust-bitvmx-workspace/${{ inputs.submodule_path }}" "$ROOT/${{ inputs.submodule_path }}"
+          echo "✅ Submodule moved to $ROOT/${{ inputs.submodule_path }}"
 
       - name: Verify Submodule Overrides
         if: env.OVERRIDDEN_MODULES != ''
