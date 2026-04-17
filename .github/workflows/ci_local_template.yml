@@ -296,6 +296,13 @@ jobs:
             -mindepth 1 -maxdepth 1 ! -name '${{ inputs.submodule_path }}' \
             -exec mv {} "$ROOT/" \;
           
+          # When using injected [patch] sections, remove .cargo/config.toml
+          # to avoid "found patches and a path override" conflict
+          if [[ -n "${{ inputs.submodules_branch }}" && -f "$ROOT/.cargo/config.toml" ]]; then
+            echo "🗑️ Removing .cargo/config.toml to avoid patch/path conflict"
+            rm -f "$ROOT/.cargo/config.toml"
+          fi
+          
           echo "✅ Workspace reorganization completed"
 
       - name: Move Workspace Submodule to Root
