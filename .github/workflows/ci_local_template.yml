@@ -155,11 +155,11 @@ jobs:
             if git ls-remote --heads "https://github.com/FairgateLabs/$SUBMODULE" "$TARGET_BRANCH" | grep -q "$TARGET_BRANCH"; then
               echo "Overriding $SUBMODULE -> $TARGET_BRANCH"
               rm -rf "$SUBMODULE"
-              if git clone --depth=1 --branch "$TARGET_BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
+              if git clone --depth=1 --branch "$TARGET_BRANCH" --recurse-submodules --shallow-submodules "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
                 echo "✅ $SUBMODULE@$TARGET_BRANCH"
               else
                 echo "❌ Clone failed for $SUBMODULE@$TARGET_BRANCH, restoring workspace submodule"
-                git submodule update --init --depth=1 "$SUBMODULE" 2>/dev/null || true
+                git submodule update --init --recursive --depth=1 "$SUBMODULE" 2>/dev/null || true
               fi
             else
               echo "⚠️ Branch $TARGET_BRANCH not found for $SUBMODULE - skipping override"
@@ -179,7 +179,7 @@ jobs:
           
           echo "SUBMODULE_BRANCH=$SUBMODULE_BRANCH" >> $GITHUB_ENV
           echo "Checking out submodule branch: $SUBMODULE_BRANCH"
-          git clone --depth=1 --branch "$SUBMODULE_BRANCH" https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
+          git clone --depth=1 --branch "$SUBMODULE_BRANCH" --recurse-submodules --shallow-submodules https://github.com/FairgateLabs/${{ inputs.submodule_path }} ${{ inputs.submodule_path }}
 
       - name: Override Submodule Branches from PR Description
         run: |
@@ -236,7 +236,7 @@ jobs:
             BRANCH="${OVERRIDES[$SUBMODULE]}"
             rm -rf "$SUBMODULE"
             
-            if git clone --depth=1 --branch "$BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
+            if git clone --depth=1 --branch "$BRANCH" --recurse-submodules --shallow-submodules "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
               echo "✅ $SUBMODULE@$BRANCH"
             else
               echo "❌ Failed to clone $SUBMODULE@$BRANCH"
@@ -281,108 +281,6 @@ jobs:
               cd ..
             fi
           done
-
-      - name: Verify BitVMX-CPU Build Artifacts
-        run: |
-          echo "🔎 Verifying BitVMX-CPU presence and build artifacts"
-          # Determine repo root
-          cd "$ROOT" || exit 1
-
-          if [[ -d "BitVMX-CPU" ]]; then
-            echo "✅ BitVMX-CPU directory exists"
-          else
-            echo "❌ BitVMX-CPU directory missing. Attempting to clone fallback..."
-            if git clone --depth=1 https://github.com/FairgateLabs/BitVMX-CPU BitVMX-CPU; then
-              echo "✅ Cloned BitVMX-CPU"
-            else
-              echo "❌ Failed to obtain BitVMX-CPU repository. Cannot proceed with integration tests."
-              echo "WARN: BitVMX-CPU clone failed; fallback clone step will try other branches." 
-              echo "BITVMX_CPU_ARTIFACTS_MISSING=true" >> $GITHUB_ENV
-              # continue so fallback step can attempt to populate artifacts
-              true
-            fi
-          fi
-
-          ARTIFACT_DIR="BitVMX-CPU/docker-riscv32/riscv32/build"
-          echo "Looking for artifacts in: $ARTIFACT_DIR"
-          if [[ -d "$ARTIFACT_DIR" ]]; then
-            echo "✅ Artifact directory exists. Listing files:"
-            ls -la "$ARTIFACT_DIR" || true
-            # Ensure at least one yaml and one elf exist
-            shopt -s nullglob
-            yaml_files=($ARTIFACT_DIR/*.yaml)
-            elf_files=($ARTIFACT_DIR/*.elf)
-            if [[ ${#yaml_files[@]} -eq 0 ]]; then
-              echo "❌ No .yaml files found in $ARTIFACT_DIR"
-              echo "BITVMX_CPU_ARTIFACTS_MISSING=true" >> $GITHUB_ENV
-              # do not exit — let fallback populate
-              true
-            fi
-            if [[ ${#elf_files[@]} -eq 0 ]]; then
-              echo "⚠️  No .elf files found in $ARTIFACT_DIR (verify if expected)"
-            fi
-          else
-            echo "❌ Artifact directory not found: $ARTIFACT_DIR"
-            echo "BITVMX_CPU_ARTIFACTS_MISSING=true" >> $GITHUB_ENV
-            # do not exit — allow fallback clone to run
-            true
-          fi
-
-      - name: Populate BitVMX-CPU Artifacts (fallback clone)
-        run: |
-          echo "🛠 Ensuring BitVMX-CPU build artifacts are available for tests"
-          cd "$ROOT" || exit 1
-          EXPECTED_DIR="BitVMX-CPU/docker-riscv32/riscv32/build"
-          if [[ -d "$EXPECTED_DIR" && $(ls -A "$EXPECTED_DIR" 2>/dev/null || true) ]]; then
-            echo "✅ Artifacts already present at $EXPECTED_DIR"
-            ls -la "$EXPECTED_DIR" || true
-            exit 0
-          fi
-
-          # Build priority: inputs.submodules_branch (if set), then 'dev', then 'main'
-          PREFERRED_BRANCH="${{ inputs.submodules_branch }}"
-          BRANCHES=()
-          if [[ -n "$PREFERRED_BRANCH" ]]; then
-            BRANCHES+=("$PREFERRED_BRANCH")
-          fi
-          BRANCHES+=("dev" "main")
-
-          TMPDIR=$(mktemp -d)
-          CLONED=0
-          for BR in "${BRANCHES[@]}"; do
-            echo "Checking remote for branch: $BR"
-            if git ls-remote --heads https://github.com/FairgateLabs/BitVMX-CPU "$BR" | grep -q "$BR"; then
-              echo "Found branch $BR on remote — cloning..."
-              if git clone --depth=1 --branch "$BR" https://github.com/FairgateLabs/BitVMX-CPU "$TMPDIR/BitVMX-CPU"; then
-                echo "✅ Cloned BitVMX-CPU@$BR into $TMPDIR"
-                CLONED=1
-                break
-              else
-                echo "⚠️ Clone failed for $BR — trying next branch"
-              fi
-            else
-              echo "Branch $BR not found on remote — trying next"
-            fi
-          done
-
-          if [[ $CLONED -ne 1 ]]; then
-            echo "❌ No suitable branch found to clone. Cannot populate artifacts."
-            rm -rf "$TMPDIR"
-            exit 1
-          fi
-
-          SRC="$TMPDIR/BitVMX-CPU/docker-riscv32/riscv32/build"
-          if [[ -d "$SRC" && $(ls -A "$SRC" 2>/dev/null || true) ]]; then
-            mkdir -p "$(dirname "$EXPECTED_DIR")"
-            cp -a "$SRC/"* "$EXPECTED_DIR" 2>/dev/null || true
-            echo "✅ Copied artifacts to $EXPECTED_DIR"
-            ls -la "$EXPECTED_DIR" || true
-            rm -rf "$TMPDIR"
-          else
-            echo "❌ Fallback repo has no build artifacts at $SRC"
-            rm -rf "$TMPDIR"
-            exit 1
-          fi
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@master
@@ -487,21 +385,6 @@ jobs:
           chmod +x scripts/build-emulator.sh
           timeout 600 scripts/build-emulator.sh
 
-      - name: Ensure BitVMX-CPU Artifacts for Integration Tests
-        if: ${{ inputs.build_cpu && inputs.integration_tests != '' }}
-        working-directory: ${{ inputs.submodule_path }}
-        run: |
-          echo "📦 Copying BitVMX-CPU build artifacts for integration tests..."
-          CPU_BUILD_DIR="../BitVMX-CPU/docker-riscv32/riscv32/build"
-          TARGET_DIR="../BitVMX-CPU/docker-riscv32/riscv32/build"
-          if [[ -d "$CPU_BUILD_DIR" ]]; then
-            mkdir -p "$TARGET_DIR"
-            cp $CPU_BUILD_DIR/*.{yaml,elf} "$TARGET_DIR" 2>/dev/null || true
-            echo "✅ Artifacts copied to $TARGET_DIR"
-          else
-            echo "⚠️ CPU build directory not found: $CPU_BUILD_DIR"
-          fi
-      
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
         timeout-minutes: 90
