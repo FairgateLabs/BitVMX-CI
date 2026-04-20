@@ -66,6 +66,11 @@ on:
         required: false
         type: string
         default: ''
+      integration_tests:
+        description: 'Space-separated list of ignored test names to run as integration tests (e.g. "test_full test_all")'
+        required: false
+        type: string
+        default: ''
       coverage_exclude:
         description: 'Comma or space separated path patterns (regex) to exclude from coverage (e.g. "tests/,benches/,examples/")'
         required: false
@@ -420,6 +425,24 @@ jobs:
             echo "⏭️ Skipping coverage measurement"
             cargo test --verbose "${CARGO_ARGS[@]}" "${TEST_ARGS[@]}"
           fi
+        env:
+          CI: true
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+
+      - name: Run Integration Tests
+        if: ${{ inputs.integration_tests != '' }}
+        working-directory: ${{ inputs.submodule_path }}
+        timeout-minutes: 90
+        run: |
+          INTEGRATION_TESTS="${{ inputs.integration_tests }}"
+          echo "🔬 Running integration tests: $INTEGRATION_TESTS"
+          
+          for TEST_NAME in $INTEGRATION_TESTS; do
+            echo "▶️ Running $TEST_NAME..."
+            cargo test --verbose "$TEST_NAME" -- --include-ignored --test-threads=1
+            echo "✅ $TEST_NAME completed"
+          done
         env:
           CI: true
           RUST_BACKTRACE: 1
