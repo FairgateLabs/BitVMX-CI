@@ -141,6 +141,7 @@ jobs:
           echo "✅ Using branch: $SAFE_BRANCH"
           
           git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
+ 
 
       - name: Override All Submodules Branch
         if: ${{ inputs.submodules_branch != '' }}
@@ -150,14 +151,18 @@ jobs:
           cd "$ROOT/rust-bitvmx-workspace"
           
           git submodule foreach --quiet 'echo $name' | while read -r SUBMODULE; do
-            echo "Overriding $SUBMODULE -> $TARGET_BRANCH"
-            rm -rf "$SUBMODULE"
-            if git clone --depth=1 --branch "$TARGET_BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
-              echo "✅ $SUBMODULE@$TARGET_BRANCH"
+            echo "Checking branch availability for $SUBMODULE -> $TARGET_BRANCH"
+            if git ls-remote --heads "https://github.com/FairgateLabs/$SUBMODULE" "$TARGET_BRANCH" | grep -q "$TARGET_BRANCH"; then
+              echo "Overriding $SUBMODULE -> $TARGET_BRANCH"
+              rm -rf "$SUBMODULE"
+              if git clone --depth=1 --branch "$TARGET_BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
+                echo "✅ $SUBMODULE@$TARGET_BRANCH"
+              else
+                echo "❌ Clone failed for $SUBMODULE@$TARGET_BRANCH, restoring workspace submodule"
+                git submodule update --init --depth=1 "$SUBMODULE" 2>/dev/null || true
+              fi
             else
-              echo "⚠️ Branch $TARGET_BRANCH not found for $SUBMODULE, keeping workspace version"
-              git checkout -- "$SUBMODULE" 2>/dev/null || true
-              git submodule update --init --depth=1 "$SUBMODULE" 2>/dev/null || true
+              echo "⚠️ Branch $TARGET_BRANCH not found for $SUBMODULE - skipping override"
             fi
           done
       
@@ -313,6 +318,62 @@ jobs:
             fi
           else
             echo "❌ Artifact directory not found: $ARTIFACT_DIR"
+            exit 1
+          fi
+
+      - name: Populate BitVMX-CPU Artifacts (fallback clone)
+        run: |
+          echo "🛠 Ensuring BitVMX-CPU build artifacts are available for tests"
+          cd "$ROOT" || exit 1
+          EXPECTED_DIR="BitVMX-CPU/docker-riscv32/riscv32/build"
+          if [[ -d "$EXPECTED_DIR" && $(ls -A "$EXPECTED_DIR" 2>/dev/null || true) ]]; then
+            echo "✅ Artifacts already present at $EXPECTED_DIR"
+            ls -la "$EXPECTED_DIR" || true
+            exit 0
+          fi
+
+          # Build priority: inputs.submodules_branch (if set), then 'dev', then 'main'
+          PREFERRED_BRANCH="${{ inputs.submodules_branch }}"
+          BRANCHES=()
+          if [[ -n "$PREFERRED_BRANCH" ]]; then
+            BRANCHES+=("$PREFERRED_BRANCH")
+          fi
+          BRANCHES+=("dev" "main")
+
+          TMPDIR=$(mktemp -d)
+          CLONED=0
+          for BR in "${BRANCHES[@]}"; do
+            echo "Checking remote for branch: $BR"
+            if git ls-remote --heads https://github.com/FairgateLabs/BitVMX-CPU "$BR" | grep -q "$BR"; then
+              echo "Found branch $BR on remote — cloning..."
+              if git clone --depth=1 --branch "$BR" https://github.com/FairgateLabs/BitVMX-CPU "$TMPDIR/BitVMX-CPU"; then
+                echo "✅ Cloned BitVMX-CPU@$BR into $TMPDIR"
+                CLONED=1
+                break
+              else
+                echo "⚠️ Clone failed for $BR — trying next branch"
+              fi
+            else
+              echo "Branch $BR not found on remote — trying next"
+            fi
+          done
+
+          if [[ $CLONED -ne 1 ]]; then
+            echo "❌ No suitable branch found to clone. Cannot populate artifacts."
+            rm -rf "$TMPDIR"
+            exit 1
+          fi
+
+          SRC="$TMPDIR/BitVMX-CPU/docker-riscv32/riscv32/build"
+          if [[ -d "$SRC" && $(ls -A "$SRC" 2>/dev/null || true) ]]; then
+            mkdir -p "$(dirname "$EXPECTED_DIR")"
+            cp -a "$SRC/"* "$EXPECTED_DIR" 2>/dev/null || true
+            echo "✅ Copied artifacts to $EXPECTED_DIR"
+            ls -la "$EXPECTED_DIR" || true
+            rm -rf "$TMPDIR"
+          else
+            echo "❌ Fallback repo has no build artifacts at $SRC"
+            rm -rf "$TMPDIR"
             exit 1
           fi
 
