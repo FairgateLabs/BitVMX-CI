@@ -296,7 +296,10 @@ jobs:
               echo "✅ Cloned BitVMX-CPU"
             else
               echo "❌ Failed to obtain BitVMX-CPU repository. Cannot proceed with integration tests."
-              exit 1
+              echo "WARN: BitVMX-CPU clone failed; fallback clone step will try other branches." 
+              echo "BITVMX_CPU_ARTIFACTS_MISSING=true" >> $GITHUB_ENV
+              # continue so fallback step can attempt to populate artifacts
+              true
             fi
           fi
 
@@ -311,14 +314,18 @@ jobs:
             elf_files=($ARTIFACT_DIR/*.elf)
             if [[ ${#yaml_files[@]} -eq 0 ]]; then
               echo "❌ No .yaml files found in $ARTIFACT_DIR"
-              exit 1
+              echo "BITVMX_CPU_ARTIFACTS_MISSING=true" >> $GITHUB_ENV
+              # do not exit — let fallback populate
+              true
             fi
             if [[ ${#elf_files[@]} -eq 0 ]]; then
               echo "⚠️  No .elf files found in $ARTIFACT_DIR (verify if expected)"
             fi
           else
             echo "❌ Artifact directory not found: $ARTIFACT_DIR"
-            exit 1
+            echo "BITVMX_CPU_ARTIFACTS_MISSING=true" >> $GITHUB_ENV
+            # do not exit — allow fallback clone to run
+            true
           fi
 
       - name: Populate BitVMX-CPU Artifacts (fallback clone)
