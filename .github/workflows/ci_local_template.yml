@@ -61,11 +61,11 @@ on:
         required: false
         type: boolean
         default: false
-      workspace_branch:
-        description: 'Branch of the workspace repository to clone (default: main)'
+      submodules_branch:
+        description: 'Override all workspace submodules to this branch (e.g. dev). If empty, submodules stay as pinned in the workspace.'
         required: false
         type: string
-        default: 'main'
+        default: ''
       coverage_exclude:
         description: 'Comma or space separated path patterns (regex) to exclude from coverage (e.g. "tests/,benches/,examples/")'
         required: false
@@ -126,9 +126,7 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ -n "${{ inputs.workspace_branch }}" && "${{ inputs.workspace_branch }}" != "main" ]]; then
-            SAFE_BRANCH="${{ inputs.workspace_branch }}"
-          elif [[ "$PR_TITLE" =~ ^\[([^\]]+)\] ]]; then
+          if [[ "$PR_TITLE" =~ ^\[([^\]]+)\] ]]; then
             SAFE_BRANCH="${BASH_REMATCH[1]}"
           else
             SAFE_BRANCH="main"
@@ -138,6 +136,25 @@ jobs:
           echo "✅ Using branch: $SAFE_BRANCH"
           
           git clone --recurse-submodules --depth=1 --branch "$SAFE_BRANCH" --shallow-submodules https://github.com/${{ inputs.repo }} rust-bitvmx-workspace
+
+      - name: Override All Submodules Branch
+        if: ${{ inputs.submodules_branch != '' }}
+        run: |
+          TARGET_BRANCH="${{ inputs.submodules_branch }}"
+          echo "🔀 Overriding all submodules to branch: $TARGET_BRANCH"
+          cd "$ROOT/rust-bitvmx-workspace"
+          
+          git submodule foreach --quiet 'echo $name' | while read -r SUBMODULE; do
+            echo "Overriding $SUBMODULE -> $TARGET_BRANCH"
+            rm -rf "$SUBMODULE"
+            if git clone --depth=1 --branch "$TARGET_BRANCH" "https://github.com/FairgateLabs/$SUBMODULE" "$SUBMODULE" 2>&1; then
+              echo "✅ $SUBMODULE@$TARGET_BRANCH"
+            else
+              echo "⚠️ Branch $TARGET_BRANCH not found for $SUBMODULE, keeping workspace version"
+              git checkout -- "$SUBMODULE" 2>/dev/null || true
+              git submodule update --init --depth=1 "$SUBMODULE" 2>/dev/null || true
+            fi
+          done
       
       - name: Checkout Current Repository
         if: ${{ !inputs.use_workspace_submodule }}
