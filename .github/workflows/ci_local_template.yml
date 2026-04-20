@@ -277,6 +277,45 @@ jobs:
             fi
           done
 
+      - name: Verify BitVMX-CPU Build Artifacts
+        run: |
+          echo "🔎 Verifying BitVMX-CPU presence and build artifacts"
+          # Determine repo root
+          cd "$ROOT" || exit 1
+
+          if [[ -d "BitVMX-CPU" ]]; then
+            echo "✅ BitVMX-CPU directory exists"
+          else
+            echo "❌ BitVMX-CPU directory missing. Attempting to clone fallback..."
+            if git clone --depth=1 https://github.com/FairgateLabs/BitVMX-CPU BitVMX-CPU; then
+              echo "✅ Cloned BitVMX-CPU"
+            else
+              echo "❌ Failed to obtain BitVMX-CPU repository. Cannot proceed with integration tests."
+              exit 1
+            fi
+          fi
+
+          ARTIFACT_DIR="BitVMX-CPU/docker-riscv32/riscv32/build"
+          echo "Looking for artifacts in: $ARTIFACT_DIR"
+          if [[ -d "$ARTIFACT_DIR" ]]; then
+            echo "✅ Artifact directory exists. Listing files:"
+            ls -la "$ARTIFACT_DIR" || true
+            # Ensure at least one yaml and one elf exist
+            shopt -s nullglob
+            yaml_files=($ARTIFACT_DIR/*.yaml)
+            elf_files=($ARTIFACT_DIR/*.elf)
+            if [[ ${#yaml_files[@]} -eq 0 ]]; then
+              echo "❌ No .yaml files found in $ARTIFACT_DIR"
+              exit 1
+            fi
+            if [[ ${#elf_files[@]} -eq 0 ]]; then
+              echo "⚠️  No .elf files found in $ARTIFACT_DIR (verify if expected)"
+            fi
+          else
+            echo "❌ Artifact directory not found: $ARTIFACT_DIR"
+            exit 1
+          fi
+
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -374,11 +413,9 @@ jobs:
             echo "❌ Build script not found: scripts/build-emulator.sh"
             exit 1
           fi
-          
           # Pin incompatible crates to versions that work with current Rust
           echo "📌 Pinning dependency versions for compatibility..."
           cargo update -p constant_time_eq@0.4.3 --precise 0.4.2 2>/dev/null || true
-
           chmod +x scripts/build-emulator.sh
           timeout 600 scripts/build-emulator.sh
 
