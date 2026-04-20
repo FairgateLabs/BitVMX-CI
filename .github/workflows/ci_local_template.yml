@@ -381,6 +381,21 @@ jobs:
 
           chmod +x scripts/build-emulator.sh
           timeout 600 scripts/build-emulator.sh
+
+        - name: Ensure BitVMX-CPU Artifacts for Integration Tests
+          if: ${{ inputs.build_cpu && inputs.integration_tests != '' }}
+          working-directory: ${{ inputs.submodule_path }}
+          run: |
+            echo "📦 Copying BitVMX-CPU build artifacts for integration tests..."
+            CPU_BUILD_DIR="../BitVMX-CPU/docker-riscv32/riscv32/build"
+            TARGET_DIR="../BitVMX-CPU/docker-riscv32/riscv32/build"
+            if [[ -d "$CPU_BUILD_DIR" ]]; then
+              mkdir -p "$TARGET_DIR"
+              cp $CPU_BUILD_DIR/*.{yaml,elf} "$TARGET_DIR" 2>/dev/null || true
+              echo "✅ Artifacts copied to $TARGET_DIR"
+            else
+              echo "⚠️ CPU build directory not found: $CPU_BUILD_DIR"
+            fi
       
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
