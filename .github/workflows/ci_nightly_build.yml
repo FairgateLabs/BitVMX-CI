@@ -27,6 +27,7 @@ jobs:
           - submodule: rust-bitvmx-client
             clippy: true
             build_cpu: true
+            build_gnova: true
             dockerfile_path: tests/docker/Dockerfile
             docker_compose_path: tests/docker/docker-compose.yml
 
@@ -38,6 +39,7 @@ jobs:
       target_path: '${{ matrix.submodule }}/target'
       clippy: ${{ matrix.clippy }}
       build_cpu: ${{ matrix.build_cpu }}
+      build_gnova: ${{ matrix.build_gnova }}
       docker_required: true
       dockerfile_path: ${{ matrix.dockerfile_path }}
       docker_compose_path: ${{ matrix.docker_compose_path }}

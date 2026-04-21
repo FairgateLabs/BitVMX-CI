@@ -46,6 +46,11 @@ on:
         required: false
         type: boolean
         default: false
+      build_gnova:
+        description: 'Flag to determine if we need to build the gnova binary (from rust-bitvmx-gc)'
+        required: false
+        type: boolean
+        default: false
       single_thread_tests:
         description: 'Run tests with --test-threads=1'
         required: false
@@ -385,6 +390,22 @@ jobs:
           chmod +x scripts/build-emulator.sh
           timeout 600 scripts/build-emulator.sh
 
+      - name: Build gnova binary (rust-bitvmx-gc)
+        if: ${{ inputs.build_gnova }}
+        working-directory: ${{ inputs.submodule_path }}/../rust-bitvmx-gc
+        run: |
+          if [[ ! -f "Cargo.toml" ]]; then
+            echo "❌ rust-bitvmx-gc/Cargo.toml not found"
+            exit 1
+          fi
+          echo "🔨 Building gnova..."
+          timeout 900 cargo build --release --bin gnova
+          if [[ ! -f "target/release/gnova" ]]; then
+            echo "❌ gnova binary not found after build"
+            exit 1
+          fi
+          echo "✅ gnova built successfully"
+
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
         timeout-minutes: 90
@@ -436,7 +457,7 @@ jobs:
       - name: Run Integration Tests
         if: ${{ inputs.integration_tests != '' }}
         working-directory: ${{ inputs.submodule_path }}
-        timeout-minutes: 90
+        timeout-minutes: 180
         run: |
           INTEGRATION_TESTS="${{ inputs.integration_tests }}"
           echo "🔬 Running integration tests: $INTEGRATION_TESTS"
