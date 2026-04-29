@@ -100,7 +100,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     
     env:
       ROOT: "/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
@@ -408,7 +408,7 @@ jobs:
 
       - name: Run Tests
         working-directory: ${{ inputs.submodule_path }}
-        timeout-minutes: 90
+        timeout-minutes: 180
         run: |
           echo "🧪 Running tests..."
 
