@@ -1,0 +1,80 @@
+name: Cargo Supply-Chain Policy
+description: Enforce a minimum crates.io package age, incident denylist, and optional Cargo policy tools
+
+inputs:
+  base-ref:
+    description: Commit to compare tracked Cargo.lock files and policy against; HEAD disables the diff-only age check
+    required: false
+    default: HEAD
+  config-path:
+    description: Optional repository-relative policy file
+    required: false
+    default: .cargo-supply-chain.toml
+
+outputs:
+  minimum_age_days:
+    description: Effective minimum crates.io package age
+    value: ${{ steps.policy.outputs.minimum_age_days }}
+  cargo_deny_enabled:
+    description: Whether cargo-deny was enabled by policy
+    value: ${{ steps.policy.outputs.cargo_deny_enabled }}
+  cargo_vet_enabled:
+    description: Whether cargo-vet was enabled by policy
+    value: ${{ steps.policy.outputs.cargo_vet_enabled }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up policy runtime
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.12'
+
+    - name: Enforce incident denylist and package age
+      id: policy
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        BASE_REF: ${{ inputs.base-ref }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+      run: |
+        python "$ACTION_PATH/scripts/cargo_supply_chain.py" check \
+          --base-ref "$BASE_REF" \
+          --config "$CONFIG_PATH" \
+          --github-output "$GITHUB_OUTPUT"
+
+    - name: Install cargo-deny
+      if: ${{ steps.policy.outputs.cargo_deny_enabled == 'true' }}
+      uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+      with:
+        tool: cargo-deny@0.20.2
+
+    - name: Run cargo-deny
+      if: ${{ steps.policy.outputs.cargo_deny_enabled == 'true' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        BASE_REF: ${{ inputs.base-ref }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+      run: |
+        python "$ACTION_PATH/scripts/cargo_supply_chain.py" run-cargo-deny \
+          --base-ref "$BASE_REF" \
+          --config "$CONFIG_PATH"
+
+    - name: Install cargo-vet
+      if: ${{ steps.policy.outputs.cargo_vet_enabled == 'true' }}
+      uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+      with:
+        tool: cargo-vet@0.10.0
+
+    - name: Run cargo-vet
+      if: ${{ steps.policy.outputs.cargo_vet_enabled == 'true' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        BASE_REF: ${{ inputs.base-ref }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+      run: |
+        python "$ACTION_PATH/scripts/cargo_supply_chain.py" run-cargo-vet \
+          --base-ref "$BASE_REF" \
+          --config "$CONFIG_PATH"
