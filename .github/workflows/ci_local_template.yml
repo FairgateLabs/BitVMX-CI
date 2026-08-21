@@ -254,10 +254,10 @@ jobs:
           echo "Reorganizing workspace for PR build..."
           cd "$ROOT/rust-bitvmx-workspace"
           
-          if [[ -f ".cargo/config.toml" ]]; then
-            echo "Copying .cargo/config.toml to preserve patches"
-            cp -f ".cargo/config.toml" "$ROOT/${{ inputs.submodule_path }}/.cargo/config.toml" 2>/dev/null || true
-          fi
+          #if [[ -f ".cargo/config.toml" ]]; then
+          #  echo "Copying .cargo/config.toml to preserve patches"
+          #  cp -f ".cargo/config.toml" "$ROOT/${{ inputs.submodule_path }}/.cargo/config.toml" 2>/dev/null || true
+          #fi
           
           find "$ROOT/rust-bitvmx-workspace" \
             -mindepth 1 -maxdepth 1 ! -name '${{ inputs.submodule_path }}' \
