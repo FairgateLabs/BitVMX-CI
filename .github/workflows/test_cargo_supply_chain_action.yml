@@ -1,0 +1,47 @@
+name: Test Cargo Supply-Chain Action
+
+on:
+  pull_request:
+    paths:
+      - 'actions/cargo-supply-chain/**'
+      - '.github/workflows/test_cargo_supply_chain_action.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'actions/cargo-supply-chain/**'
+      - '.github/workflows/test_cargo_supply_chain_action.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        working-directory: actions/cargo-supply-chain/scripts
+        run: python -m unittest discover -p 'test_*.py'
+
+  integration-test:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Run local action against safe fixture
+        uses: ./actions/cargo-supply-chain
+        with:
+          base-ref: ${{ github.event.pull_request.base.sha }}

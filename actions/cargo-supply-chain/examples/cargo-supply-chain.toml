@@ -1,0 +1,16 @@
+schema-version = 1
+
+[age]
+# Optional. Defaults to 7 when this file or key is absent.
+minimum-days = 7
+
+[cargo-deny]
+enabled = false
+config = "deny.toml"
+manifests = ["Cargo.toml"]
+checks = ["advisories", "bans", "licenses", "sources"]
+
+[cargo-vet]
+enabled = false
+manifests = ["Cargo.toml"]
+locked = true

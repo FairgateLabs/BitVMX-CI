@@ -1,0 +1,8 @@
+# This file is an integration fixture for the reusable action.
+version = 4
+
+[[package]]
+name = "arrayref"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a2e8124351fda1ef8aaaa3bbd7e30117a3a489c5cd051c87fe7c706c7adf6e"
