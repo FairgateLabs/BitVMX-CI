@@ -23,6 +23,8 @@ The minimum consumer step is:
 
 The action requires a tracked `Cargo.lock`. The core checks need no Rust installation. If `cargo-deny` or `cargo-vet` is enabled, the runner must also have Rust and Cargo available.
 
+`base-ref` defaults to `HEAD`. This still scans every current lockfile for incident packages but finds no newly resolved versions, which is useful on scheduled, tag, or post-merge runs. Pull request workflows should always pass the base SHA so the age gate can evaluate lockfile changes.
+
 ## Optional configuration
 
 The action looks for `.cargo-supply-chain.toml` at the repository root. The file is optional: when it is absent, the seven-day age gate and the incident denylist remain active while `cargo-deny` and `cargo-vet` remain disabled.

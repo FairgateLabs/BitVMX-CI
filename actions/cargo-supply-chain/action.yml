@@ -3,8 +3,9 @@ description: Enforce a minimum crates.io package age, incident denylist, and opt
 
 inputs:
   base-ref:
-    description: Commit to compare tracked Cargo.lock files and policy against
-    required: true
+    description: Commit to compare tracked Cargo.lock files and policy against; HEAD disables the diff-only age check
+    required: false
+    default: HEAD
   config-path:
     description: Optional repository-relative policy file
     required: false
