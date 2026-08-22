@@ -291,7 +291,16 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.95.0'
-          components: llvm-tools-preview
+          components: llvm-tools-preview, rustfmt, clippy
+     
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+   
+      - name: Audit dependencies
+        working-directory: ${{ inputs.submodule_path }}
+        run: cargo audit
 
       - name: Install cargo-llvm-cov
         if: ${{ inputs.measure_coverage }}
