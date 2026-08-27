@@ -84,9 +84,6 @@ on:
       REPO_ACCESS_TOKEN:
         description: 'Token to access the repository'
         required: true
-      SSH_PRIVATE_KEY:
-        description: 'Private SSH key to authenticate with GitHub'
-        required: true
       SLACK_WEBHOOK_URL:
         description: 'Webhook endpoint to post on channel'
         required: false
@@ -120,12 +117,7 @@ jobs:
             
       - name: Check disk space
         run: df -h
-
-      - name: Configure SSH for Git Submodule Access
-        uses: webfactory/ssh-agent@v0.5.4
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
+      
       - name: Configure Git with Token Authentication
         run: |
           git config --global url."https://x-access-token:${REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
