@@ -195,23 +195,35 @@ jobs:
           OVERRIDDEN_MODULES=""
           
           cd "$ROOT/rust-bitvmx-workspace" || exit 1
+
+          
+          trim() {
+            local s="$1"
+            s="${s#"${s%%[![:space:]]*}"}"
+            s="${s%"${s##*[![:space:]]}"}"
+            printf '%s' "$s"
+          }
           
           while IFS= read -r line; do
-            line=$(echo "$line" | tr -d '\r\n' | xargs)
+            # read already removes the newline; just remove CR for Windows line endings
+            line="${line//$'\r'/}"
+            line=$(trim "$line")
+          
             [[ -z "$line" ]] && continue
-            
+          
             if [[ "${line,,}" == override:* ]]; then
               line="${line#*:}"
-              line=$(echo "$line" | xargs)
-              
+              line=$(trim "$line")
+          
               if [[ "$line" == *":"* ]]; then
                 REPO="${line%%:*}"
                 BRANCH="${line#*:}"
-                REPO=$(echo "$REPO" | tr -d '\r\n' | xargs)
-                BRANCH=$(echo "$BRANCH" | tr -d '\r\n' | xargs)
-                
+          
+                REPO=$(trim "$REPO")
+                BRANCH=$(trim "$BRANCH")
+          
                 [[ -z "$REPO" || -z "$BRANCH" ]] && continue
-                
+          
                 if [[ -d "$REPO" ]]; then
                   OVERRIDES["$REPO"]="$BRANCH"
                   FOUND_ANY=true
@@ -221,7 +233,7 @@ jobs:
               fi
             fi
           done <<< "$PR_BODY"
-          
+ 
           if [[ "$FOUND_ANY" == "false" ]]; then
             echo "OVERRIDDEN_MODULES=" >> $GITHUB_ENV
             exit 0
