@@ -294,7 +294,7 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.95.0'
+          toolchain: '1.97.0'
           components: llvm-tools-preview, rustfmt, clippy
      
       - name: Install cargo-audit
