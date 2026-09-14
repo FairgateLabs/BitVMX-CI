@@ -74,7 +74,9 @@ Exceptions apply only to the matching package, never its transitive dependencies
 
 ### PR policy enforcement and migration
 
-For every package, the checker evaluates its required age independently under the base and current policy, including exceptions, then enforces the larger duration. This prevents a PR from lowering its own age requirement or authorizing its own exception. Merge an exception-only PR first, then update the dependency in a subsequent PR. Removing or narrowing an exception takes effect immediately.
+Exact-version exceptions in the **current PR's** `cooldown.toml` take effect in that same PR. This lets reviewers approve an urgent fix and its narrow age exception together. Approval is owned by GitHub review and branch protection; the checker does not query review status. Require trusted review of `cooldown.toml` before merging.
+
+For packages without a current exact exception, the checker evaluates the required age independently under the base and current policy, including package rules, then enforces the larger duration. Default-age reductions and new or broadened package-wide exceptions must land in a separate policy PR before a dependency update can use them. Removing or narrowing an exception takes effect immediately. An exact exception covers only the named version, not future releases or transitive dependencies; it never bypasses incident or metadata checks.
 
 If `cooldown.toml` is absent, the checker accepts the legacy `[age].minimum-days` in `.cargo-supply-chain.toml`, falling back to 14 days if that setting is also absent. This compatibility applies independently to each revision, so an older base commit remains protected during migration. Having both `cooldown.toml` and `[age]` in the same revision is an error: move the age setting rather than duplicating it. An empty or malformed `cooldown.toml` is an error, not a fallback.
 
