@@ -41,6 +41,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Use the shared root policy example
+        run: cp actions/cargo-supply-chain/examples/cooldown.toml cooldown.toml
+
       - name: Run local action against safe fixture
         uses: ./actions/cargo-supply-chain
         with:

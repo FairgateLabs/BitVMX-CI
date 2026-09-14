@@ -1,0 +1,20 @@
+# Shared age policy for developers and the BitVMX-CI admission checker.
+[registry]
+global-min-publish-age = "14 days"
+
+# These settings control developers' cargo-cooldown runs only.
+# CI always rejects violations and compares lockfiles with the PR base.
+[cooldown]
+incompatible-publish-age = "deny"
+lockfile-baseline = "floor"
+
+# Prefer exact exceptions for reviewed urgent fixes. Merge the exception
+# before the dependency update; a PR cannot authorize its own exception.
+# [[allow.exact]]
+# crate = "example-crate"
+# version = "1.2.3"
+
+# Package exceptions affect future versions too; "0" disables their age gate.
+# [[allow.package]]
+# crate = "example-crate"
+# min-publish-age = "1 day"
