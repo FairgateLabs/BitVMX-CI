@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+import io
+import subprocess
+import sys
+from contextlib import redirect_stdout, redirect_stderr
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -9,6 +13,13 @@ from unittest.mock import patch
 
 from cargo_supply_chain import (
     CARGO_DENY_CHECKS,
+    AgePolicy,
+    check_package_ages,
+    load_policy,
+    main,
+    parse_cooldown,
+    parse_duration,
+    resolve_policy,
     CargoDenyPolicy,
     CargoVetPolicy,
     CheckError,
@@ -67,7 +78,7 @@ locked = false
             "policy.toml",
         )
 
-        self.assertEqual(policy.minimum_age_days, 14)
+        self.assertEqual(policy.minimum_age, timedelta(days=14))
         self.assertEqual(
             policy.cargo_deny,
             CargoDenyPolicy(
@@ -99,7 +110,7 @@ locked = false
 
     def test_pr_policy_cannot_weaken_base_policy(self) -> None:
         base = Policy(
-            minimum_age_days=14,
+            age_policies=(AgePolicy(timedelta(days=14)),),
             cargo_deny=CargoDenyPolicy(
                 enabled=True,
                 checks=("bans", "sources"),
@@ -107,14 +118,14 @@ locked = false
             cargo_vet=CargoVetPolicy(enabled=True, locked=True),
         )
         current = Policy(
-            minimum_age_days=3,
+            age_policies=(AgePolicy(timedelta(days=3)),),
             cargo_deny=CargoDenyPolicy(enabled=False),
             cargo_vet=CargoVetPolicy(enabled=False, locked=False),
         )
 
         merged = effective_policy(current, base)
 
-        self.assertEqual(merged.minimum_age_days, 14)
+        self.assertEqual(merged.minimum_age, timedelta(days=14))
         self.assertTrue(merged.cargo_deny.enabled)
         self.assertEqual(merged.cargo_deny.checks, ("bans", "sources"))
         self.assertTrue(merged.cargo_vet.enabled)
@@ -122,14 +133,304 @@ locked = false
 
     def test_stricter_current_policy_applies_immediately(self) -> None:
         current = Policy(
-            minimum_age_days=10,
+            age_policies=(AgePolicy(timedelta(days=10)),),
             cargo_deny=CargoDenyPolicy(enabled=True, checks=("bans",)),
         )
         merged = effective_policy(current, Policy())
 
-        self.assertEqual(merged.minimum_age_days, 10)
+        self.assertEqual(merged.minimum_age, timedelta(days=10))
         self.assertTrue(merged.cargo_deny.enabled)
         self.assertEqual(merged.cargo_deny.checks, ("bans",))
+
+
+class CooldownConfigTests(unittest.TestCase):
+    HEADER = '[registry]\nglobal-min-publish-age = "7 days"\n'
+    PACKAGE = Package("demo", "1.2.3")
+
+    def parse(self, extra: str = "") -> AgePolicy:
+        return parse_cooldown((self.HEADER + extra).encode())
+
+    def test_duration_units_and_zero(self) -> None:
+        for unit, seconds in (
+            ("second", 1),
+            ("minute", 60),
+            ("hour", 3600),
+            ("day", 86400),
+            ("week", 604800),
+            ("month", 2592000),
+        ):
+            for suffix in ("", "s"):
+                with self.subTest(unit=unit, suffix=suffix):
+                    self.assertEqual(
+                        parse_duration(f" 2 {unit}{suffix} ", "test"),
+                        timedelta(seconds=2 * seconds),
+                    )
+        self.assertEqual(parse_duration("0", "test"), timedelta(0))
+
+    def test_invalid_durations_fail_closed(self) -> None:
+        for value in (
+            True,
+            7,
+            "",
+            "7d",
+            "-1 days",
+            "1.5 hours",
+            "1 day 2 hours",
+            "1 DAY",
+            "1 year",
+            "18446744073709551616 seconds",
+            "999999999999999999999999 months",
+        ):
+            with self.subTest(value=value), self.assertRaises(CheckError):
+                parse_duration(value, "test")
+
+    def test_crates_io_override_replaces_global_in_either_direction(self) -> None:
+        for days in (0, 3, 14):
+            with self.subTest(days=days):
+                age = self.parse(f'min-publish-age = "{days} days"\n')
+                self.assertEqual(age.minimum_age, timedelta(days=days))
+
+    def test_exact_exception_does_not_exempt_other_versions_or_dependencies(
+        self,
+    ) -> None:
+        age = self.parse('[[allow.exact]]\ncrate = "demo"\nversion = "1.2.3"\n')
+        self.assertEqual(age.required_age(self.PACKAGE), timedelta(0))
+        self.assertEqual(age.required_age(Package("demo", "1.2.4")), timedelta(days=7))
+        self.assertEqual(
+            age.required_age(Package("transitive", "1.2.3")), timedelta(days=7)
+        )
+
+    def test_package_exceptions_only_reduce_age(self) -> None:
+        for duration, expected in (
+            ("1 hour", timedelta(hours=1)),
+            ("0", timedelta(0)),
+            ("14 days", timedelta(days=7)),
+        ):
+            with self.subTest(duration=duration):
+                age = self.parse(
+                    f'[[allow.package]]\ncrate = "demo"\nmin-publish-age = "{duration}"\n'
+                )
+                self.assertEqual(age.required_age(self.PACKAGE), expected)
+
+    def test_exact_exception_takes_precedence_over_package(self) -> None:
+        age = self.parse(
+            '[[allow.package]]\ncrate = "demo"\nmin-publish-age = "1 day"\n[[allow.exact]]\ncrate = "demo"\nversion = "1.2.3"\n'
+        )
+        self.assertEqual(age.required_age(self.PACKAGE), timedelta(0))
+
+    def test_resolver_settings_are_validated_but_never_weaken_ci(self) -> None:
+        for mode in ("deny", "fallback", "allow"):
+            for baseline in ("floor", "ignore"):
+                age = self.parse(
+                    f'[cooldown]\nincompatible-publish-age = "{mode}"\nlockfile-baseline = "{baseline}"\nfallback-accept = "auto"\n'
+                )
+                self.assertEqual(age.required_age(self.PACKAGE), timedelta(days=7))
+
+    def test_invalid_and_unsupported_configuration_fails_closed(self) -> None:
+        cases = (
+            '[cooldown]\nincompatible-publish-age = "off"',
+            '[cooldown]\nlockfile-baseline = "anything"',
+            "[cooldown]\nfallback-accept = true",
+            "[cooldown]\nunknown = true",
+            "[allow]\nexact = {}",
+            "[allow]\npackage = [1]",
+            '[[allow.exact]]\ncrate = "demo"',
+            '[[allow.exact]]\ncrate = "*"\nversion = "1.2.3"',
+            '[[allow.exact]]\ncrate = "demo"\nversion = 1',
+            '[[allow.package]]\ncrate = "demo"',
+            '[[allow.package]]\ncrate = "demo"\nmin-publish-age = "0"\nreason = "unsupported"',
+            '[[allow.package]]\ncrate = "demo"\nmin-publish-age = "0"\n[[allow.package]]\ncrate = "demo"\nmin-publish-age = "1 day"',
+            "[allow.global]\nminutes = 0",
+            '[registries.internal]\nmin-publish-age = "0"',
+        )
+        for extra in cases:
+            with self.subTest(extra=extra), self.assertRaises(CheckError):
+                self.parse(extra)
+        for contents in (
+            b"",
+            b"skip_registries = []",
+            b"now = '2030-01-01'",
+            b"registry = 7",
+            b"[broken",
+            b"\xff",
+        ):
+            with self.subTest(contents=contents), self.assertRaises(CheckError):
+                parse_cooldown(contents)
+
+    def test_each_revision_is_evaluated_before_taking_stricter_age(self) -> None:
+        exact = self.parse('[[allow.exact]]\ncrate = "demo"\nversion = "1.2.3"\n')
+        normal = self.parse()
+        package = self.parse(
+            '[[allow.package]]\ncrate = "demo"\nmin-publish-age = "1 day"\n'
+        )
+        for base, current, expected in (
+            (normal, exact, 7),
+            (exact, normal, 7),
+            (exact, exact, 0),
+            (exact, package, 1),
+            (package, exact, 1),
+        ):
+            with self.subTest(base=base, current=current):
+                policy = effective_policy(
+                    Policy(age_policies=(current,)), Policy(age_policies=(base,))
+                )
+                self.assertEqual(
+                    policy.required_age(self.PACKAGE), timedelta(days=expected)
+                )
+        # An exception in the stricter global policy must be evaluated before
+        # comparing against the other revision's unexcepted shorter default.
+        base = AgePolicy(timedelta(days=14), frozenset({self.PACKAGE}))
+        policy = effective_policy(
+            Policy(age_policies=(normal,)), Policy(age_policies=(base,))
+        )
+        self.assertEqual(policy.required_age(self.PACKAGE), timedelta(days=7))
+
+    def test_exceptions_do_not_bypass_metadata_failures(self) -> None:
+        policy = Policy(age_policies=(AgePolicy(exact=frozenset({self.PACKAGE})),))
+        now = datetime.now(timezone.utc)
+        for record in (
+            None,
+            {"yanked": True},
+            {"yanked": False},
+            {"pubtime": "invalid"},
+        ):
+            indexes = (
+                {"demo": {"1.2.3": record}} if record is not None else {"demo": {}}
+            )
+            with self.subTest(record=record), patch(
+                "cargo_supply_chain.fetch_indexes", return_value=(indexes, {})
+            ):
+                self.assertEqual(
+                    check_package_ages({self.PACKAGE: {"Cargo.lock"}}, policy, now), 1
+                )
+        with patch(
+            "cargo_supply_chain.fetch_indexes",
+            return_value=({}, {"demo": "network failure"}),
+        ):
+            self.assertEqual(
+                check_package_ages({self.PACKAGE: {"Cargo.lock"}}, policy, now), 1
+            )
+
+
+class RepositoryPolicyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.previous = Path.cwd()
+        self.addCleanup(os.chdir, self.previous)
+        os.chdir(self.directory.name)
+        self.git("init", "-q")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("config", "user.name", "Policy test")
+        Path("Cargo.lock").write_bytes(lockfile(("old", "1.0.0", CRATES_IO)))
+        Path(".cargo-supply-chain.toml").write_text("[age]\nminimum-days = 7\n")
+        self.commit()
+        self.base = self.git("rev-parse", "HEAD")
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def commit(self) -> None:
+        self.git("add", ".")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "test policy")
+
+    def migrate(self, days: int = 7, extra: str = "") -> None:
+        Path(".cargo-supply-chain.toml").write_text("schema-version = 1\n")
+        Path("cooldown.toml").write_text(
+            f'[registry]\nglobal-min-publish-age = "{days} days"\n' + extra
+        )
+
+    def test_legacy_migration_preserves_base_age(self) -> None:
+        self.migrate(3)
+        policy = resolve_policy(".cargo-supply-chain.toml", self.base)
+        self.assertEqual(
+            policy.required_age(Package("demo", "1.0.0")), timedelta(days=7)
+        )
+
+    def test_duplicate_age_sources_are_rejected(self) -> None:
+        Path("cooldown.toml").write_text(CooldownConfigTests.HEADER)
+        with self.assertRaisesRegex(CheckError, r"remove \[age\]"):
+            load_policy(".cargo-supply-chain.toml")
+
+    def test_deleting_cooldown_cannot_relax_base_policy(self) -> None:
+        self.migrate(14)
+        self.commit()
+        Path("cooldown.toml").unlink()
+        policy = resolve_policy(".cargo-supply-chain.toml", "HEAD")
+        self.assertEqual(
+            policy.required_age(Package("demo", "1.0.0")), timedelta(days=14)
+        )
+
+    def test_missing_files_preserve_seven_day_default(self) -> None:
+        Path(".cargo-supply-chain.toml").unlink()
+        self.assertEqual(load_policy(".cargo-supply-chain.toml"), Policy())
+
+    def test_override_cannot_be_bypassed_by_exceptions(self) -> None:
+        self.migrate(extra='[[allow.exact]]\ncrate = "demo"\nversion = "1.0.0"\n')
+        self.commit()
+        policy = resolve_policy(".cargo-supply-chain.toml", "HEAD", 10)
+        self.assertEqual(
+            policy.required_age(Package("demo", "1.0.0")), timedelta(days=10)
+        )
+
+    def run_checker(self, base: str) -> int:
+        record = {"pubtime": datetime.now(timezone.utc).isoformat(), "yanked": False}
+        indexes = {
+            "demo": {"1.0.0": record},
+            "transitive": {"1.0.0": record},
+            "arrayref": {"0.3.10": record},
+        }
+        lock_path = Path(self.directory.name) / "Cargo.lock"
+        original_lock = lock_path.read_bytes()
+        with patch.object(sys, "argv", ["checker", "check", "--base-ref", base]), patch(
+            "cargo_supply_chain.fetch_indexes", return_value=(indexes, {})
+        ), patch(
+            "cargo_supply_chain.subprocess.run", wraps=subprocess.run
+        ) as commands, redirect_stdout(
+            io.StringIO()
+        ), redirect_stderr(
+            io.StringIO()
+        ):
+            result = main()
+        self.assertEqual(lock_path.read_bytes(), original_lock)
+        self.assertTrue(
+            all(call.args[0][0] == "git" for call in commands.call_args_list)
+        )
+        return result
+
+    def test_exception_must_land_before_dependency_and_does_not_cover_transitives(
+        self,
+    ) -> None:
+        self.migrate(extra='[[allow.exact]]\ncrate = "demo"\nversion = "1.0.0"\n')
+        # Policy-only change can land; adding the fresh dependency in the same
+        # PR cannot use that new exception.
+        self.assertEqual(self.run_checker(self.base), 0)
+        original = Path("Cargo.lock").read_bytes()
+        Path("Cargo.lock").write_bytes(lockfile(("demo", "1.0.0", CRATES_IO)))
+        self.assertEqual(self.run_checker(self.base), 1)
+        Path("Cargo.lock").write_bytes(original)
+        self.commit()
+        approved_base = self.git("rev-parse", "HEAD")
+        Path("Cargo.lock").write_bytes(lockfile(("demo", "1.0.0", CRATES_IO)))
+        self.assertEqual(self.run_checker(approved_base), 0)
+        Path("Cargo.lock").write_bytes(
+            lockfile(("demo", "1.0.0", CRATES_IO), ("transitive", "1.0.0", CRATES_IO))
+        )
+        self.assertEqual(self.run_checker(approved_base), 1)
+
+    def test_approved_exception_cannot_override_incident_denylist(self) -> None:
+        self.migrate(extra='[[allow.exact]]\ncrate = "arrayref"\nversion = "0.3.10"\n')
+        self.commit()
+        Path("Cargo.lock").write_bytes(lockfile(("arrayref", "0.3.10", CRATES_IO)))
+        self.assertEqual(self.run_checker("HEAD"), 1)
+
+    def test_checker_resolves_config_at_repo_root_from_nested_directory(self) -> None:
+        self.migrate()
+        Path("nested").mkdir()
+        os.chdir("nested")
+        self.assertEqual(self.run_checker(self.base), 0)
 
 
 class LockfileTests(unittest.TestCase):
@@ -215,9 +516,7 @@ class AgePolicyTests(unittest.TestCase):
 
     def test_recent_release_is_rejected(self) -> None:
         record = {"pubtime": "2026-08-15T12:00:00Z", "yanked": False}
-        violation = policy_violation(
-            self.PACKAGE, record, self.NOW, self.MINIMUM_AGE
-        )
+        violation = policy_violation(self.PACKAGE, record, self.NOW, self.MINIMUM_AGE)
         self.assertIn("not eligible until", violation or "")
 
     def test_yanked_release_is_rejected(self) -> None:
@@ -302,7 +601,7 @@ class OptionalToolTests(unittest.TestCase):
 
     def test_github_outputs_expose_effective_policy(self) -> None:
         policy = Policy(
-            minimum_age_days=9,
+            age_policies=(AgePolicy(timedelta(days=9)),),
             cargo_deny=CargoDenyPolicy(enabled=True),
             cargo_vet=CargoVetPolicy(enabled=False),
         )

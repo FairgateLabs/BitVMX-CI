@@ -1,8 +1,6 @@
 schema-version = 1
 
-[age]
-# Optional. Defaults to 7 when this file or key is absent.
-minimum-days = 7
+# Age policy and exceptions live in repository-root cooldown.toml.
 
 [cargo-deny]
 enabled = false

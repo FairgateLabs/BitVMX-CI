@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -25,6 +27,7 @@ except ModuleNotFoundError:  # Python < 3.11, used by some local development hos
 
 DEFAULT_MINIMUM_AGE_DAYS = 7
 CONFIG_SCHEMA_VERSION = 1
+COOLDOWN_CONFIG_PATH = "cooldown.toml"
 CRATES_IO_INDEXES = {
     "https://github.com/rust-lang/crates.io-index",
     "https://index.crates.io",
@@ -79,10 +82,34 @@ class CargoVetPolicy:
 
 
 @dataclass(frozen=True)
+class AgePolicy:
+    minimum_age: timedelta = timedelta(days=DEFAULT_MINIMUM_AGE_DAYS)
+    exact: frozenset[Package] = frozenset()
+    packages: tuple[tuple[str, timedelta], ...] = ()
+
+    def required_age(self, package: Package) -> timedelta:
+        if package in self.exact:
+            return timedelta(0)
+        for name, minimum_age in self.packages:
+            if name == package.name:
+                return min(self.minimum_age, minimum_age)
+        return self.minimum_age
+
+
+@dataclass(frozen=True)
 class Policy:
-    minimum_age_days: int = DEFAULT_MINIMUM_AGE_DAYS
+    # Keep each revision's age rules separate: merging allowlists would let a
+    # PR authorize its own exceptions or broaden an already-approved exception.
+    age_policies: tuple[AgePolicy, ...] = (AgePolicy(),)
     cargo_deny: CargoDenyPolicy = CargoDenyPolicy()
     cargo_vet: CargoVetPolicy = CargoVetPolicy()
+
+    @property
+    def minimum_age(self) -> timedelta:
+        return max(age.minimum_age for age in self.age_policies)
+
+    def required_age(self, package: Package) -> timedelta:
+        return max(age.required_age(package) for age in self.age_policies)
 
 
 def reject_unknown_keys(
@@ -125,12 +152,125 @@ def path_list(value: object, location: str) -> tuple[str, ...]:
     return paths
 
 
-def parse_policy(contents: bytes, path: str) -> Policy:
+def parse_toml(contents: bytes, path: str) -> Mapping[str, Any]:
     try:
-        root = tomllib.loads(contents.decode("utf-8"))
+        return tomllib.loads(contents.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise CheckError(f"failed to parse {path}: {error}") from error
 
+
+def parse_duration(value: object, location: str) -> timedelta:
+    """Match cargo-cooldown's `0` / integer + singular or plural unit syntax."""
+    if not isinstance(value, str):
+        raise CheckError(f"{location} must be a duration string")
+    value = value.strip()
+    if value == "0":
+        return timedelta(0)
+    parts = value.split()
+    units = {
+        "second": 1,
+        "minute": 60,
+        "hour": 3600,
+        "day": 86400,
+        "week": 604800,
+        "month": 2592000,
+    }
+    if (
+        len(parts) != 2
+        or re.fullmatch(r"[+]?[0-9]+", parts[0]) is None
+        or parts[1] not in {unit + suffix for unit in units for suffix in ("", "s")}
+    ):
+        raise CheckError(
+            f"{location}: invalid duration; expected 0 or N seconds/minutes/hours/days/weeks/months"
+        )
+    try:
+        seconds = int(parts[0]) * units[parts[1].removesuffix("s")]
+        if seconds > 2**64 - 1:
+            raise OverflowError
+        return timedelta(seconds=seconds)
+    except (ValueError, OverflowError) as error:
+        raise CheckError(f"{location}: duration is too large") from error
+
+
+def parse_cooldown(contents: bytes, path: str = COOLDOWN_CONFIG_PATH) -> AgePolicy:
+    root = parse_toml(contents, path)
+    # This is deliberately a supported subset, not a second Cargo resolver.
+    # Unsupported policy knobs must fail closed rather than silently diverge.
+    reject_unknown_keys(root, {"registry", "cooldown", "allow"}, path)
+    registry = table_value(root, "registry", path)
+    reject_unknown_keys(
+        registry, {"global-min-publish-age", "min-publish-age"}, f"{path} [registry]"
+    )
+    if "global-min-publish-age" not in registry:
+        raise CheckError(f"{path} must set registry.global-min-publish-age explicitly")
+    minimum_age = parse_duration(
+        registry["global-min-publish-age"], f"{path} registry.global-min-publish-age"
+    )
+    if "min-publish-age" in registry:
+        minimum_age = parse_duration(
+            registry["min-publish-age"], f"{path} registry.min-publish-age"
+        )
+
+    cooldown = table_value(root, "cooldown", path)
+    choices = {
+        "incompatible-publish-age": ("deny", "fallback", "allow"),
+        "lockfile-baseline": ("floor", "ignore"),
+        "fallback-accept": ("prompt", "auto"),
+    }
+    reject_unknown_keys(cooldown, set(choices), f"{path} [cooldown]")
+    for key, value in cooldown.items():
+        if value not in choices[key]:
+            raise CheckError(
+                f"{path} cooldown.{key} must be one of: {', '.join(choices[key])}"
+            )
+    # The validated resolver settings above never change CI's rejection or base
+    # comparison behavior, even when a developer selects fallback/allow/ignore.
+    allow = table_value(root, "allow", path)
+    reject_unknown_keys(allow, {"exact", "package"}, f"{path} [allow]")
+    exact: set[Package] = set()
+    packages: dict[str, timedelta] = {}
+    for kind in ("exact", "package"):
+        entries = allow.get(kind, [])
+        if not isinstance(entries, list):
+            raise CheckError(f"{path} allow.{kind} must be an array of tables")
+        for entry in entries:
+            location = f"{path} [[allow.{kind}]]"
+            if not isinstance(entry, dict):
+                raise CheckError(f"{location} must be a table")
+            required = {"crate", "version" if kind == "exact" else "min-publish-age"}
+            reject_unknown_keys(entry, required, location)
+            if not required <= entry.keys():
+                raise CheckError(f"{location} requires {', '.join(sorted(required))}")
+            name = entry["crate"]
+            if (
+                not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]+", name) is None
+            ):
+                raise CheckError(
+                    f"{location}.crate must be a crate name, not a pattern"
+                )
+            if kind == "exact":
+                version = entry["version"]
+                if (
+                    not isinstance(version, str)
+                    or not version
+                    or version.strip() != version
+                ):
+                    raise CheckError(
+                        f"{location}.version must be a non-empty exact version string"
+                    )
+                exact.add(Package(name, version))
+            else:
+                if name in packages:
+                    raise CheckError(f"{location}: duplicate package rule for {name}")
+                packages[name] = parse_duration(
+                    entry["min-publish-age"], f"{location}.min-publish-age"
+                )
+    return AgePolicy(minimum_age, frozenset(exact), tuple(packages.items()))
+
+
+def parse_policy(contents: bytes, path: str) -> Policy:
+    root = parse_toml(contents, path)
     reject_unknown_keys(
         root,
         {"schema-version", "age", "cargo-deny", "cargo-vet"},
@@ -138,9 +278,7 @@ def parse_policy(contents: bytes, path: str) -> Policy:
     )
     schema_version = root.get("schema-version", CONFIG_SCHEMA_VERSION)
     if type(schema_version) is not int or schema_version != CONFIG_SCHEMA_VERSION:
-        raise CheckError(
-            f"{path} schema-version must be {CONFIG_SCHEMA_VERSION}"
-        )
+        raise CheckError(f"{path} schema-version must be {CONFIG_SCHEMA_VERSION}")
 
     age = table_value(root, "age", path)
     reject_unknown_keys(age, {"minimum-days"}, f"{path} [age]")
@@ -191,7 +329,7 @@ def parse_policy(contents: bytes, path: str) -> Policy:
     )
 
     return Policy(
-        minimum_age_days=minimum_age_days,
+        age_policies=(AgePolicy(timedelta(days=minimum_age_days)),),
         cargo_deny=cargo_deny,
         cargo_vet=cargo_vet,
     )
@@ -226,11 +364,27 @@ def read_base_file(base_ref: str, path: str) -> bytes | None:
 
 
 def load_policy(path: str, base_ref: str | None = None) -> Policy:
-    if base_ref is None:
+    def read(path: str) -> bytes | None:
+        if base_ref is not None:
+            return read_base_file(base_ref, path)
         config = Path(path)
-        return parse_policy(config.read_bytes(), path) if config.is_file() else Policy()
-    contents = read_base_file(base_ref, path)
-    return parse_policy(contents, f"{path} at {base_ref}") if contents else Policy()
+        return config.read_bytes() if config.exists() else None
+
+    contents = read(path)
+    location = f"{path} at {base_ref}" if base_ref else path
+    policy = parse_policy(contents, location) if contents is not None else Policy()
+    cooldown = read(COOLDOWN_CONFIG_PATH)
+    if cooldown is not None:
+        if contents is not None and "age" in parse_toml(contents, location):
+            raise CheckError(f"{location}: remove [age] when using root cooldown.toml")
+        location = (
+            f"{COOLDOWN_CONFIG_PATH} at {base_ref}"
+            if base_ref
+            else COOLDOWN_CONFIG_PATH
+        )
+        return replace(policy, age_policies=(parse_cooldown(cooldown, location),))
+    # Legacy fallback lets consumers migrate without changing the base policy.
+    return policy
 
 
 def ordered_union(first: Sequence[str], second: Sequence[str]) -> tuple[str, ...]:
@@ -265,7 +419,7 @@ def effective_policy(current: Policy, base: Policy) -> Policy:
     )
 
     return Policy(
-        minimum_age_days=max(current.minimum_age_days, base.minimum_age_days),
+        age_policies=tuple(dict.fromkeys((*base.age_policies, *current.age_policies))),
         cargo_deny=CargoDenyPolicy(
             enabled=deny_enabled,
             config=deny_config,
@@ -295,10 +449,12 @@ def resolve_policy(
     if minimum_age_override is not None:
         if minimum_age_override < 1:
             raise CheckError("minimum age override must be at least 1")
-        policy = Policy(
-            minimum_age_days=max(policy.minimum_age_days, minimum_age_override),
-            cargo_deny=policy.cargo_deny,
-            cargo_vet=policy.cargo_vet,
+        policy = replace(
+            policy,
+            age_policies=(
+                *policy.age_policies,
+                AgePolicy(timedelta(days=minimum_age_override)),
+            ),
         )
     return policy
 
@@ -393,9 +549,9 @@ def incident_packages(
     for path, contents in current_lockfiles.items():
         for package in all_packages_from_lockfile(contents, path):
             if (
-                (package.name, package.version) in COMPROMISED_RELEASES
-                or package.name in MALICIOUS_CRATES
-            ):
+                package.name,
+                package.version,
+            ) in COMPROMISED_RELEASES or package.name in MALICIOUS_CRATES:
                 violations.setdefault(package, set()).add(path)
     return violations
 
@@ -493,7 +649,12 @@ def policy_violation(
     if record.get("yanked") is True:
         return "is yanked on crates.io"
     published = parse_pubtime(record.get("pubtime"), package)
-    eligible_at = published + minimum_age
+    try:
+        eligible_at = published + minimum_age
+    except OverflowError as error:
+        raise CheckError(
+            f"minimum age exceeds supported datetime range for {package}"
+        ) from error
     if now < eligible_at:
         return (
             f"was published at {published.isoformat()} and is not eligible until "
@@ -516,19 +677,23 @@ def check_incidents(packages: Mapping[Package, set[str]]) -> int:
 
 
 def check_package_ages(
-    packages: Mapping[Package, set[str]], minimum_age_days: int, now: datetime
+    packages: Mapping[Package, set[str]], policy: Policy, now: datetime
 ) -> int:
     if not packages:
         print("No newly resolved crates.io package versions found.")
         return 0
     print(
         f"Checking {len(packages)} newly resolved crates.io package version(s) "
-        f"against a {minimum_age_days}-day minimum age."
+        f"against a {policy.minimum_age.total_seconds() / 86400:g}-day default minimum age."
     )
     indexes, index_errors = fetch_indexes({package.name for package in packages})
     failures = 0
-    minimum_age = timedelta(days=minimum_age_days)
     for package, paths in sorted(packages.items()):
+        minimum_age = policy.required_age(package)
+        if minimum_age < policy.minimum_age:
+            print(
+                f"Age exception applied to {package}: {minimum_age.total_seconds():g} seconds minimum (metadata and incident checks still apply)."
+            )
         try:
             violation = index_errors.get(package.name)
             if violation is None:
@@ -550,7 +715,9 @@ def write_github_outputs(path: str | None, policy: Policy) -> None:
     if path is None:
         return
     with Path(path).open("a", encoding="utf-8") as output:
-        output.write(f"minimum_age_days={policy.minimum_age_days}\n")
+        output.write(
+            f"minimum_age_days={policy.minimum_age.total_seconds() / 86400:g}\n"
+        )
         output.write(f"cargo_deny_enabled={str(policy.cargo_deny.enabled).lower()}\n")
         output.write(f"cargo_vet_enabled={str(policy.cargo_vet.enabled).lower()}\n")
 
@@ -621,6 +788,13 @@ def main() -> int:
     args = parse_args()
     try:
         ensure_base_ref(args.base_ref)
+        repository_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        os.chdir(repository_root)
         policy = resolve_policy(
             args.config,
             args.base_ref,
@@ -639,7 +813,7 @@ def main() -> int:
         incident_failures = check_incidents(incident_packages(current))
         age_failures = check_package_ages(
             newly_resolved_packages(current, base),
-            policy.minimum_age_days,
+            policy,
             datetime.now(timezone.utc),
         )
         write_github_outputs(args.github_output, policy)
