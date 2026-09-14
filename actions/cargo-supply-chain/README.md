@@ -3,7 +3,7 @@
 This composite action provides a reusable dependency-admission gate for Rust repositories. It scans every tracked `Cargo.lock` before Cargo tooling executes and applies these checks:
 
 1. Reject the compromised releases and attacker-controlled crate names from the August 2026 [`arrayref` incident](https://blog.rust-lang.org/2026/08/20/supply-chain-attack-on-arrayref/).
-2. Compare every tracked lockfile with the pull request base and reject newly resolved crates.io releases until they meet a minimum age. The shared policy lives in repository-root `cooldown.toml`; the fallback is seven days.
+2. Compare every tracked lockfile with the pull request base and reject newly resolved crates.io releases until they meet a minimum age. The shared policy lives in repository-root `cooldown.toml`; the fallback is 14 days.
 3. Reject newly resolved crates.io releases that are yanked, deleted, or missing a publication timestamp.
 4. Optionally install and run `cargo-deny` and `cargo-vet` using their native project configuration.
 
@@ -31,7 +31,7 @@ Commit [`examples/cooldown.toml`](examples/cooldown.toml) as `cooldown.toml` at 
 
 ```toml
 [registry]
-global-min-publish-age = "7 days"
+global-min-publish-age = "14 days"
 
 [cooldown]
 incompatible-publish-age = "deny"
@@ -76,7 +76,7 @@ Exceptions apply only to the matching package, never its transitive dependencies
 
 For every package, the checker evaluates its required age independently under the base and current policy, including exceptions, then enforces the larger duration. This prevents a PR from lowering its own age requirement or authorizing its own exception. Merge an exception-only PR first, then update the dependency in a subsequent PR. Removing or narrowing an exception takes effect immediately.
 
-If `cooldown.toml` is absent, the checker accepts the legacy `[age].minimum-days` in `.cargo-supply-chain.toml`, falling back to seven days if that setting is also absent. This compatibility applies independently to each revision, so an older base commit remains protected during migration. Having both `cooldown.toml` and `[age]` in the same revision is an error: move the age setting rather than duplicating it. An empty or malformed `cooldown.toml` is an error, not a fallback.
+If `cooldown.toml` is absent, the checker accepts the legacy `[age].minimum-days` in `.cargo-supply-chain.toml`, falling back to 14 days if that setting is also absent. This compatibility applies independently to each revision, so an older base commit remains protected during migration. Having both `cooldown.toml` and `[age]` in the same revision is an error: move the age setting rather than duplicating it. An empty or malformed `cooldown.toml` is an error, not a fallback.
 
 The command-line minimum-age override is for controlled testing and only tightens policy, including for excepted packages. The `minimum_age_days` action output is the effective default age in days (possibly fractional), not the age for every excepted package.
 

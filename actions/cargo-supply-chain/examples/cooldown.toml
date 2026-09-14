@@ -1,6 +1,6 @@
 # Shared age policy for developers and the BitVMX-CI admission checker.
 [registry]
-global-min-publish-age = "7 days"
+global-min-publish-age = "14 days"
 
 # These settings control developers' cargo-cooldown runs only.
 # CI always rejects violations and compares lockfiles with the PR base.

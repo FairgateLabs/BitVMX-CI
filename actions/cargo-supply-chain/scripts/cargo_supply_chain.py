@@ -25,7 +25,7 @@ except ModuleNotFoundError:  # Python < 3.11, used by some local development hos
     import tomli as tomllib  # type: ignore[no-redef]
 
 
-DEFAULT_MINIMUM_AGE_DAYS = 7
+DEFAULT_MINIMUM_AGE_DAYS = 14
 CONFIG_SCHEMA_VERSION = 1
 COOLDOWN_CONFIG_PATH = "cooldown.toml"
 CRATES_IO_INDEXES = {

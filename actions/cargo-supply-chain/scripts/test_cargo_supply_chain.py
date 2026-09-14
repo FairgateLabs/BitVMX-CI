@@ -53,8 +53,10 @@ def lockfile(*packages: tuple[str, str, str | None]) -> bytes:
 
 
 class ConfigTests(unittest.TestCase):
-    def test_empty_config_uses_seven_day_default(self) -> None:
-        self.assertEqual(parse_policy(b"", "policy.toml"), Policy())
+    def test_empty_config_uses_fourteen_day_default(self) -> None:
+        self.assertEqual(
+            parse_policy(b"", "policy.toml").minimum_age, timedelta(days=14)
+        )
 
     def test_all_options_are_parsed(self) -> None:
         policy = parse_policy(
@@ -133,12 +135,12 @@ locked = false
 
     def test_stricter_current_policy_applies_immediately(self) -> None:
         current = Policy(
-            age_policies=(AgePolicy(timedelta(days=10)),),
+            age_policies=(AgePolicy(timedelta(days=21)),),
             cargo_deny=CargoDenyPolicy(enabled=True, checks=("bans",)),
         )
         merged = effective_policy(current, Policy())
 
-        self.assertEqual(merged.minimum_age, timedelta(days=10))
+        self.assertEqual(merged.minimum_age, timedelta(days=21))
         self.assertTrue(merged.cargo_deny.enabled)
         self.assertEqual(merged.cargo_deny.checks, ("bans",))
 
@@ -355,17 +357,19 @@ class RepositoryPolicyTests(unittest.TestCase):
             load_policy(".cargo-supply-chain.toml")
 
     def test_deleting_cooldown_cannot_relax_base_policy(self) -> None:
-        self.migrate(14)
+        self.migrate(21)
         self.commit()
         Path("cooldown.toml").unlink()
         policy = resolve_policy(".cargo-supply-chain.toml", "HEAD")
         self.assertEqual(
-            policy.required_age(Package("demo", "1.0.0")), timedelta(days=14)
+            policy.required_age(Package("demo", "1.0.0")), timedelta(days=21)
         )
 
-    def test_missing_files_preserve_seven_day_default(self) -> None:
+    def test_missing_files_use_fourteen_day_default(self) -> None:
         Path(".cargo-supply-chain.toml").unlink()
-        self.assertEqual(load_policy(".cargo-supply-chain.toml"), Policy())
+        self.assertEqual(
+            load_policy(".cargo-supply-chain.toml").minimum_age, timedelta(days=14)
+        )
 
     def test_override_cannot_be_bypassed_by_exceptions(self) -> None:
         self.migrate(extra='[[allow.exact]]\ncrate = "demo"\nversion = "1.0.0"\n')
