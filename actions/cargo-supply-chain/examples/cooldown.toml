@@ -8,13 +8,14 @@ global-min-publish-age = "14 days"
 incompatible-publish-age = "deny"
 lockfile-baseline = "floor"
 
-# Prefer exact exceptions for reviewed urgent fixes. Merge the exception
-# before the dependency update; a PR cannot authorize its own exception.
+# Prefer exact exceptions for reviewed urgent fixes. Review the exception
+# together with the dependency update; it takes effect in the same PR.
 # [[allow.exact]]
 # crate = "example-crate"
 # version = "1.2.3"
 
-# Package exceptions affect future versions too; "0" disables their age gate.
+# Package exceptions affect future versions too; merge them before the update.
+# "0" disables the matching package age gate.
 # [[allow.package]]
 # crate = "example-crate"
 # min-publish-age = "1 day"

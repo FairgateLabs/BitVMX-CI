@@ -98,8 +98,8 @@ class AgePolicy:
 
 @dataclass(frozen=True)
 class Policy:
-    # Keep each revision's age rules separate: merging allowlists would let a
-    # PR authorize its own exceptions or broaden an already-approved exception.
+    # Keep each revision's package-wide rules separate so a PR cannot relax
+    # them. Exact exceptions in the current revision are review-owned.
     age_policies: tuple[AgePolicy, ...] = (AgePolicy(),)
     cargo_deny: CargoDenyPolicy = CargoDenyPolicy()
     cargo_vet: CargoVetPolicy = CargoVetPolicy()
@@ -392,7 +392,17 @@ def ordered_union(first: Sequence[str], second: Sequence[str]) -> tuple[str, ...
 
 
 def effective_policy(current: Policy, base: Policy) -> Policy:
-    """Prevent a PR from weakening its own dependency policy."""
+    """Preserve base policy except for review-owned current exact exceptions."""
+
+    current_exact = frozenset(
+        package for age in current.age_policies for package in age.exact
+    )
+    # Exact pins may ship with the update in one reviewed PR. Apply only those
+    # pins to the base age rules; broad package and default relaxations still
+    # have to satisfy both revisions. Removing a pin restores the current rule.
+    base_ages = tuple(
+        replace(age, exact=age.exact | current_exact) for age in base.age_policies
+    )
 
     deny_enabled = current.cargo_deny.enabled or base.cargo_deny.enabled
     if current.cargo_deny.enabled:
@@ -419,7 +429,7 @@ def effective_policy(current: Policy, base: Policy) -> Policy:
     )
 
     return Policy(
-        age_policies=tuple(dict.fromkeys((*base.age_policies, *current.age_policies))),
+        age_policies=tuple(dict.fromkeys((*base_ages, *current.age_policies))),
         cargo_deny=CargoDenyPolicy(
             enabled=deny_enabled,
             config=deny_config,

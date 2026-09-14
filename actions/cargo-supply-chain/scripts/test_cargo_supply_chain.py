@@ -266,11 +266,11 @@ class CooldownConfigTests(unittest.TestCase):
             '[[allow.package]]\ncrate = "demo"\nmin-publish-age = "1 day"\n'
         )
         for base, current, expected in (
-            (normal, exact, 7),
+            (normal, exact, 0),
             (exact, normal, 7),
             (exact, exact, 0),
             (exact, package, 1),
-            (package, exact, 1),
+            (package, exact, 0),
         ):
             with self.subTest(base=base, current=current):
                 policy = effective_policy(
@@ -404,31 +404,49 @@ class RepositoryPolicyTests(unittest.TestCase):
         )
         return result
 
-    def test_exception_must_land_before_dependency_and_does_not_cover_transitives(
-        self,
-    ) -> None:
+    def test_same_pr_exact_exception_does_not_cover_transitives(self) -> None:
         self.migrate(extra='[[allow.exact]]\ncrate = "demo"\nversion = "1.0.0"\n')
-        # Policy-only change can land; adding the fresh dependency in the same
-        # PR cannot use that new exception.
+        Path("Cargo.lock").write_bytes(lockfile(("demo", "1.0.0", CRATES_IO)))
         self.assertEqual(self.run_checker(self.base), 0)
+        Path("Cargo.lock").write_bytes(
+            lockfile(("demo", "1.0.0", CRATES_IO), ("transitive", "1.0.0", CRATES_IO))
+        )
+        self.assertEqual(self.run_checker(self.base), 1)
+
+    def test_same_pr_package_exception_still_requires_base_approval(self) -> None:
+        self.migrate(extra='[[allow.package]]\ncrate = "demo"\nmin-publish-age = "0"\n')
         original = Path("Cargo.lock").read_bytes()
         Path("Cargo.lock").write_bytes(lockfile(("demo", "1.0.0", CRATES_IO)))
         self.assertEqual(self.run_checker(self.base), 1)
         Path("Cargo.lock").write_bytes(original)
         self.commit()
-        approved_base = self.git("rev-parse", "HEAD")
         Path("Cargo.lock").write_bytes(lockfile(("demo", "1.0.0", CRATES_IO)))
-        self.assertEqual(self.run_checker(approved_base), 0)
-        Path("Cargo.lock").write_bytes(
-            lockfile(("demo", "1.0.0", CRATES_IO), ("transitive", "1.0.0", CRATES_IO))
-        )
-        self.assertEqual(self.run_checker(approved_base), 1)
+        self.assertEqual(self.run_checker("HEAD"), 0)
 
-    def test_approved_exception_cannot_override_incident_denylist(self) -> None:
-        self.migrate(extra='[[allow.exact]]\ncrate = "arrayref"\nversion = "0.3.10"\n')
+    def test_removing_exact_exception_restores_age_requirement(self) -> None:
+        self.migrate(extra='[[allow.exact]]\ncrate = "demo"\nversion = "1.0.0"\n')
         self.commit()
-        Path("Cargo.lock").write_bytes(lockfile(("arrayref", "0.3.10", CRATES_IO)))
+        self.migrate()
+        Path("Cargo.lock").write_bytes(lockfile(("demo", "1.0.0", CRATES_IO)))
         self.assertEqual(self.run_checker("HEAD"), 1)
+
+    def test_same_pr_exact_exception_does_not_relax_other_default_ages(self) -> None:
+        Path(".cargo-supply-chain.toml").write_text("[age]\nminimum-days = 21\n")
+        self.commit()
+        self.migrate(3, extra='[[allow.exact]]\ncrate = "demo"\nversion = "1.0.0"\n')
+        policy = resolve_policy(".cargo-supply-chain.toml", "HEAD")
+        self.assertEqual(policy.required_age(Package("demo", "1.0.0")), timedelta(0))
+        self.assertEqual(
+            policy.required_age(Package("demo", "1.0.1")), timedelta(days=21)
+        )
+        self.assertEqual(
+            policy.required_age(Package("transitive", "1.0.0")), timedelta(days=21)
+        )
+
+    def test_same_pr_exact_exception_cannot_override_incident_denylist(self) -> None:
+        self.migrate(extra='[[allow.exact]]\ncrate = "arrayref"\nversion = "0.3.10"\n')
+        Path("Cargo.lock").write_bytes(lockfile(("arrayref", "0.3.10", CRATES_IO)))
+        self.assertEqual(self.run_checker(self.base), 1)
 
     def test_checker_resolves_config_at_repo_root_from_nested_directory(self) -> None:
         self.migrate()
